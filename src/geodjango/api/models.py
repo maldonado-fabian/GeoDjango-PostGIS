@@ -32,6 +32,17 @@ class Clases(models.Model):
         unique_together = (('sub_indicador', 'nombre'),)
 
 
+class DjangoMigrations(models.Model):
+    id = models.BigAutoField(primary_key=True)
+    app = models.CharField(max_length=255)
+    name = models.CharField(max_length=255)
+    applied = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'django_migrations'
+
+
 class Evaluacion(models.Model):
     id_inmueble = models.ForeignKey('Inmuebles', models.DO_NOTHING, db_column='id_inmueble')
     id_clase = models.ForeignKey(Clases, models.DO_NOTHING, db_column='id_clase')
@@ -60,11 +71,11 @@ class Indicadores(models.Model):
 
 
 class Inmuebles(models.Model):
-    manzana = models.IntegerField(blank=True, null=True)
-    predio = models.IntegerField(blank=True, null=True)
-    rol_sii = models.IntegerField(unique=True)
+    manzana = models.CharField(max_length=50, blank=True, null=True)
+    predio = models.CharField(max_length=50, blank=True, null=True)
+    rol_sii = models.CharField(unique=True, max_length=25)
     direccion = models.CharField(max_length=255)
-    geom = models.PointField(blank=True, null=True)
+    geom = models.MultiPolygonField(blank=True, null=True)
     region = models.CharField(max_length=100, blank=True, null=True)
     fecha_creacion = models.DateTimeField(blank=True, null=True)
     fecha_actualizacion = models.DateTimeField(blank=True, null=True)

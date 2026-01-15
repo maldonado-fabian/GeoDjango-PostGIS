@@ -38,4 +38,7 @@ urlpatterns = [
     ,path('inmuebles/crear/',views.crear_inmueble)
     ,path('inmuebles/actualizar/<int:pk>/',views.actualizar_inmueble)
 
+    ,path('procesar-kmz/', views.ProcesarKMZView.as_view(), name='procesar-kmz')
 ]
+
+ 

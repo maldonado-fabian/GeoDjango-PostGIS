@@ -1,8 +1,19 @@
+
+import os
+import zipfile
+import tempfile
+import geopandas as gpd
+import pandas as pd
+from shapely import wkb
+from bs4 import BeautifulSoup
+from django.contrib.gis.geos import GEOSGeometry
+from rest_framework.views import APIView
+from rest_framework import status
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
 from .serializers import AmenazasSerializer, ClasesSerializer, EvaluacionSerializer, IndicadoresSerializer, InmueblesSerializer, SubIndicadoresSerializer
-
 
 
 # Create your views here.
@@ -227,3 +238,106 @@ def actualizar_inmueble(request, pk):
         return Response(serializer.data)
     return Response(serializer.errors, status=400)
 
+# Procesar KMZ View
+class ProcesarKMZView(APIView):
+    parser_classes = [MultiPartParser]
+    
+    def post(self, request):
+        if 'archivo_kmz' not in request.FILES:
+            return Response(
+                {'error': 'No se proporcionó archivo KMZ'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        archivo_kmz = request.FILES['archivo_kmz']
+        
+        try:
+            # Procesar el archivo KMZ
+            new_df = self.procesar_kmz(archivo_kmz)
+            
+            # Insertar en la base de datos
+            insertados = self.insertar_dataframe_en_bd(new_df)
+            
+            return Response({
+                'mensaje': f'Procesados {len(new_df)} registros, insertados {insertados}',
+                'total': len(new_df),
+                'insertados': insertados
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Error: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def procesar_kmz(self, archivo_kmz):
+        """Procesa igual que tu código con DataFrame"""
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Guardar archivo
+            kmz_path = os.path.join(temp_dir, "archivo.kmz")
+            with open(kmz_path, "wb") as f:
+                for chunk in archivo_kmz.chunks():
+                    f.write(chunk)
+            
+            # Extraer KMZ
+            extraction_dir = os.path.join(temp_dir, "extracted_kml")
+            with zipfile.ZipFile(kmz_path, "r") as kmz:
+                kmz.extractall(extraction_dir)
+            
+            # Leer KML
+            gdf = gpd.read_file(os.path.join(extraction_dir, "doc.kml"), driver='libkml')
+            
+            # Crear DataFrame igual que tu código
+            new_df = pd.DataFrame(columns=['Rol_SII', 'direccion', 'predio_sii', 'mzs_sii', 'geometria'])
+            
+            for row in gdf.iterrows():
+                rol_sii = row[1]['Name']
+                soup = BeautifulSoup(row[1]['description'], 'html.parser')
+
+                rows = soup.find_all('tr')
+                # Extraer datos específicos
+                direccion = soup.find('td', string='Direccion').find_next_sibling('td').string
+                mzs_sii = soup.find('td', string='Mzs_SII').find_next_sibling('td').string.strip()
+                prd_sii = soup.find('td', string='Prd_SII').find_next_sibling('td').string.strip()
+
+                if rol_sii == f"{mzs_sii}-0{prd_sii[0:4]}":
+                    new_df = pd.concat([new_df, pd.DataFrame({
+                        'Rol_SII': [rol_sii],
+                        'direccion': [direccion],
+                        'predio_sii': [prd_sii],
+                        'mzs_sii': [mzs_sii],
+                        'geometria': [row[1]['geometry']]
+                    })], ignore_index=True)
+            
+            new_df['geometria'] = new_df['geometria'].apply(
+                lambda geom: wkb.loads(wkb.dumps(geom, output_dimension=2)) if geom else geom)
+            return new_df
+    
+    def insertar_dataframe_en_bd(self, df):
+        """Inserta DataFrame en la base de datos"""
+        insertados = 0
+        
+        for _, row in df.iterrows():
+            try:
+                # Convertir geometría
+                geometria = GEOSGeometry(row['geometria'].wkt) if row['geometria'] else None
+                
+                # Crear o actualizar
+                Inmuebles.objects.update_or_create(
+                    rol_sii=row['Rol_SII'],
+                    defaults={
+                        'manzana': row['mzs_sii'],
+                        'predio': row['predio_sii'],
+                        'direccion': row['direccion'],
+                        'geom': geometria,
+                        'region': 'Valparaiso'
+                    }
+                )
+                insertados += 1
+                
+            except Exception as e:
+                print(f"Error insertando {row['Rol_SII']}: {str(e)}")
+                continue
+        
+        return insertados

@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
+from django.contrib.gis.geos import GEOSGeometry
 
 class AmenazasSerializer(serializers.ModelSerializer):
     class Meta:
@@ -29,5 +30,5 @@ class SubIndicadoresSerializer(serializers.ModelSerializer):
 class InmueblesSerializer(serializers.ModelSerializer):
     class Meta:
         model = Inmuebles
-        fields = '__all__'
+        fields = ['id', 'manzana', 'predio', 'rol_sii', 'direccion', 'geom', 'region']
     
