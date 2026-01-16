@@ -45,7 +45,7 @@ class DjangoMigrations(models.Model):
 
 class Evaluacion(models.Model):
     id_inmueble = models.ForeignKey('Inmuebles', models.DO_NOTHING, db_column='id_inmueble')
-    id_clase = models.ForeignKey(Clases, models.DO_NOTHING, db_column='id_clase')
+    id_subindicador = models.ForeignKey('SubIndicadores', models.DO_NOTHING, db_column='id_subindicador')
     fecha_evaluacion = models.DateField()
     fecha_creacion = models.DateTimeField(blank=True, null=True)
     fecha_actualizacion = models.DateTimeField(blank=True, null=True)
@@ -53,7 +53,7 @@ class Evaluacion(models.Model):
     class Meta:
         managed = False
         db_table = 'evaluacion'
-        unique_together = (('id_inmueble', 'id_clase', 'fecha_evaluacion'),)
+        unique_together = (('id_inmueble', 'id_subindicador'),)
 
 
 class Indicadores(models.Model):
@@ -72,9 +72,9 @@ class Indicadores(models.Model):
 
 class Inmuebles(models.Model):
     manzana = models.CharField(max_length=50, blank=True, null=True)
-    predio = models.CharField(max_length=50, blank=True, null=True)
+    predio = models.CharField(max_length=255, blank=True, null=True)
     rol_sii = models.CharField(unique=True, max_length=25)
-    direccion = models.CharField(max_length=255)
+    direccion = models.CharField(max_length=255, blank=True, null=True)
     geom = models.MultiPolygonField(blank=True, null=True)
     region = models.CharField(max_length=100, blank=True, null=True)
     fecha_creacion = models.DateTimeField(blank=True, null=True)
