@@ -39,6 +39,9 @@ urlpatterns = [
     ,path('inmuebles/actualizar/<int:pk>/',views.actualizar_inmueble)
 
     ,path('procesar-kmz/', views.ProcesarKMZView.as_view(), name='procesar-kmz')
+
+    # Crear SHP
+    ,path('crear-shp/', views.CrearSHPView.as_view(), name='crear-shp')
 ]
 
  

@@ -12,6 +12,8 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -78,13 +80,14 @@ WSGI_APPLICATION = 'geodjango.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.contrib.gis.db.backends.postgis',
-        'NAME': 'GRD_Docker',
-        'HOST': 'localhost',
-        'PORT': '5434',
-        'USER': 'postgres',
-        'PASSWORD': 'izipizi123',
+        'ENGINE': (os.getenv('DATABASE_ENGINE')),
+        'NAME': (os.getenv('DATABASE_NAME')),
+        'HOST': (os.getenv('DATABASE_HOST')),
+        'PORT': (os.getenv('DATABASE_PORT')),
+        'USER': (os.getenv('DATABASE_USER')),
+        'PASSWORD': (os.getenv('DATABASE_PASSWORD')),
         'OPTIONS': {
+            # Para elegir un esquema especifico
             'options': '-c search_path=public'
         }
     }

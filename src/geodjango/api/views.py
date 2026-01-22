@@ -1,4 +1,3 @@
-
 import os
 import zipfile
 import tempfile
@@ -14,7 +13,11 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
 from .serializers import AmenazasSerializer, ClasesSerializer, EvaluacionSerializer, IndicadoresSerializer, InmueblesSerializer, SubIndicadoresSerializer
-
+from django.conf import settings
+from sqlalchemy import create_engine
+from django.http import HttpResponse
+from dotenv import load_dotenv
+load_dotenv()
 
 # Create your views here.
 
@@ -25,6 +28,7 @@ def lista_amenazas(request):
     serializer = AmenazasSerializer(amenazas, many=True)
     return Response(serializer.data)
 
+
 @api_view(['GET'])
 def detalle_amenaza(request, pk):
     try:
@@ -34,6 +38,7 @@ def detalle_amenaza(request, pk):
 
     serializer = AmenazasSerializer(amenaza)
     return Response(serializer.data)
+
 
 @api_view(['POST'])
 def crear_amenaza(request):
@@ -182,6 +187,7 @@ def detalle_subindicador(request, pk):
 
     serializer = SubIndicadoresSerializer(subindicador)
     return Response(serializer.data)
+
 @api_view(['POST'])
 def crear_subindicador(request):
     serializer = SubIndicadoresSerializer(data=request.data)
@@ -189,6 +195,7 @@ def crear_subindicador(request):
         serializer.save()
         return Response(serializer.data, status=201)
     return Response(serializer.errors, status=400)
+
 @api_view(['PUT'])
 def actualizar_subindicador(request, pk):
     try:
@@ -238,6 +245,71 @@ def actualizar_inmueble(request, pk):
         return Response(serializer.data)
     return Response(serializer.errors, status=400)
 
+
+#Crear SHP
+class CrearSHPView(APIView):
+    
+    def get(self, request):
+
+        # Configuración de conexión a la base de datos
+        db_connection_url = "postgresql://"+os.getenv('DATABASE_USER')+":"+os.getenv('DATABASE_PASSWORD')+"@"+os.getenv('DATABASE_HOST')+":"+os.getenv('DATABASE_PORT')+"/"+os.getenv('DATABASE_NAME')
+        con = create_engine(db_connection_url)
+        
+        # Consulta SQL
+        sql = """
+        SELECT id_inmueble, direccion, rol_sii, SUM(total) as indice_de_riesgo, geom,
+            CASE 
+                WHEN SUM(total) <= 1.75 THEN '#00FF00'  -- Verde para bajo riesgo
+                WHEN SUM(total) <= 2.5 THEN '#FFFF00'  -- Amarillo para riesgo medio
+                WHEN SUM(total) <= 3.25 THEN '#FFA500'  -- Naranja
+                WHEN SUM(total) <= 4.76 THEN '#FF0000'
+                ELSE '#FFFFFF'
+            END as symbol_color
+        FROM (
+            SELECT e.id_inmueble, i.geom, i.direccion, i.rol_sii, ind.id as indicador_id,
+                   SUM(e.valor * si.peso) * ind.peso as total 
+            FROM evaluacion e 
+            JOIN sub_indicadores si ON e.id_subindicador = si.id 
+            JOIN indicadores ind ON si.indicador_id = ind.id 
+            JOIN inmuebles i ON e.id_inmueble = i.id 
+            WHERE ind.amenaza_id = 1 
+            GROUP BY e.id_inmueble, ind.id, ind.peso, i.geom, i.direccion, i.rol_sii
+        ) as subtotales 
+        GROUP BY id_inmueble, geom, direccion, rol_sii 
+        ORDER BY id_inmueble;
+        """
+        
+        # Leer datos desde PostgreSQL a GeoDataFrame
+        gdf = gpd.read_postgis(sql, con)
+        
+        # Crear directorio temporal
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Nombre base para los archivos
+            base_name = "Incendio"
+            shp_path = os.path.join(temp_dir, f"{base_name}.shp")
+            
+            # Guardar GeoDataFrame como Shapefile (esto crea múltiples archivos: .shp, .shx, .dbf, .prj)
+            gdf.to_file(shp_path, driver='ESRI Shapefile',encoding='utf-8')
+            
+            # Crear un archivo ZIP que contenga todos los archivos del shapefile
+            zip_path = os.path.join(temp_dir, f"{base_name}.zip")
+            
+            import zipfile
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Agregar todos los archivos del shapefile al ZIP
+                for file_ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
+                    file_path = os.path.join(temp_dir, f"{base_name}{file_ext}")
+                    if os.path.exists(file_path):
+                        zipf.write(file_path, f"{base_name}{file_ext}")
+            
+            # Enviar el archivo ZIP como respuesta
+            with open(zip_path, 'rb') as zip_file:
+                response = HttpResponse(
+                    zip_file.read(),
+                    content_type='application/zip'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{base_name}.zip"'
+                return response
 # Procesar KMZ View
 class ProcesarKMZView(APIView):
     parser_classes = [MultiPartParser]
