@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  postgis:
+    image: postgis/postgis:16-3.4-alpine
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: GRD_Docker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: izipizi123
+    ports:
+      - "5435:5432"
+
+  django:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src/geodjango:/app/src/geodjango
+    environment:
+      POSTGRES_HOST: postgis
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: GRD_Docker
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: izipizi123
+    depends_on:
+      - postgis
+    command: >
+      sh -c "python3 src/geodjango/manage.py runserver 0.0.0.0:8000"

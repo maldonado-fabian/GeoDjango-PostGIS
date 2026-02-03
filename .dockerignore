@@ -1,0 +1,6 @@
+*/src/env
+
+*/src/geodjango/api/migrations
+*/src/geodjango/api/__pycache__
+*/src/geodjango/geodjango/__pycache__
+

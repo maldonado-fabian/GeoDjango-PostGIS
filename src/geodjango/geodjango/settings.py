@@ -82,8 +82,8 @@ DATABASES = {
     'default': {
         'ENGINE': (os.getenv('DATABASE_ENGINE')),
         'NAME': (os.getenv('DATABASE_NAME')),
-        'HOST': (os.getenv('DATABASE_HOST')),
-        'PORT': (os.getenv('DATABASE_PORT')),
+        'HOST': (os.getenv('DATABASE_HOST', 'postgis')),
+        'PORT': (os.getenv('DATABASE_PORT', '5432')),
         'USER': (os.getenv('DATABASE_USER')),
         'PASSWORD': (os.getenv('DATABASE_PASSWORD')),
         'OPTIONS': {
