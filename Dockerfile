@@ -6,7 +6,7 @@ WORKDIR /app
 COPY /src/geodjango/requirements.txt requirements.txt
 
 RUN pip install -r requirements.txt
-RUN apt-get update && apt-get install -y binutils libproj-dev gdal-bin
+RUN apt-get update && apt-get install -y binutils libproj-dev gdal-bin qgis
 
 
 COPY . .

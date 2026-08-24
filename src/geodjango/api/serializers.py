@@ -32,3 +32,22 @@ class InmueblesSerializer(serializers.ModelSerializer):
         model = Inmuebles
         fields = ['id', 'manzana', 'predio', 'rol_sii', 'direccion', 'geom', 'region']
     
+class EvaluacionDetalleSerializer(serializers.ModelSerializer):
+    sub_indicador_nombre = serializers.CharField(source='id_subindicador.nombre', read_only=True)
+
+    class Meta:
+        model = Evaluacion
+        fields = ['id', 'id_subindicador', 'sub_indicador_nombre', 'valor', 'fecha_evaluacion']
+
+class InmueblesUpdateSerializer(serializers.ModelSerializer):
+    """Limited serializer for editor partial updates (excludes geom and rol_sii)."""
+    class Meta:
+        model = Inmuebles
+        fields = ['id', 'direccion', 'region', 'manzana', 'predio']
+        read_only_fields = ['id']
+
+class RiesgoConteoSerializer(serializers.Serializer):
+    nivel_riesgo = serializers.CharField()
+    cantidad = serializers.IntegerField()
+    color = serializers.CharField(required=False)
+    riesgo_promedio = serializers.FloatField(required=False)

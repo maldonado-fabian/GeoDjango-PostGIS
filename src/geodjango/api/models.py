@@ -46,6 +46,7 @@ class DjangoMigrations(models.Model):
 class Evaluacion(models.Model):
     id_inmueble = models.ForeignKey('Inmuebles', models.DO_NOTHING, db_column='id_inmueble')
     id_subindicador = models.ForeignKey('SubIndicadores', models.DO_NOTHING, db_column='id_subindicador')
+    valor = models.IntegerField(default=0)
     fecha_evaluacion = models.DateField()
     fecha_creacion = models.DateTimeField(blank=True, null=True)
     fecha_actualizacion = models.DateTimeField(blank=True, null=True)

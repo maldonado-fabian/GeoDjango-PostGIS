@@ -1,7 +1,14 @@
 from django.urls import path
+from rest_framework_simplejwt.views import TokenRefreshView
+from .tokens import CustomTokenObtainPairView
 from . import views
 
 urlpatterns = [
+    # Auth
+    path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('me/', views.me, name='me'),
+
     #Amenazas URLs
     path('amenazas/',views.lista_amenazas)
     ,path('amenazas/<int:pk>/',views.detalle_amenaza)
@@ -16,6 +23,7 @@ urlpatterns = [
 
     #Evaluacion URLs
     ,path('evaluacion/',views.lista_evaluaciones)
+    ,path('evaluacion/inmueble/<int:pk>/',views.lista_evaluaciones_inmueble)
     ,path('evaluacion/<int:pk>/',views.detalle_evaluacion)
     ,path('evaluacion/crear/',views.crear_evaluacion)
     ,path('evaluacion/actualizar/<int:pk>/',views.actualizar_evaluacion)
@@ -42,6 +50,17 @@ urlpatterns = [
 
     # Crear SHP
     ,path('crear-shp/', views.CrearSHPView.as_view(), name='crear-shp')
+
+    # Crear KML
+    ,path('crear-kml/', views.CrearKMLView.as_view(), name='crear-kml')
+
+    # Crear KMZ con detalle completo por indicador
+    ,path('crear-kml-detalle/', views.CrearKMLDetalleView.as_view(), name='crear-kml-detalle')
+
+    # Reporte PDF de resumen global (asíncrono con Celery)
+    ,path('generar-pdf-resumen/', views.GenerarPDFResumenView.as_view(), name='generar-pdf-resumen')
+    ,path('generar-pdf-resumen/estado/<str:task_id>/', views.EstadoPDFResumenView.as_view(), name='estado-pdf-resumen')
+    ,path('generar-pdf-resumen/descargar/<str:task_id>/', views.DescargarPDFResumenView.as_view(), name='descargar-pdf-resumen')
 ]
 
  
