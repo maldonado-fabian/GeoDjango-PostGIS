@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GRD · Mapa de Riesgo</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+    <!-- ===== LOGIN MODAL ===== -->
+    <div id="login-modal" class="login-overlay">
+        <div class="login-card">
+            <div class="login-header">
+                <div class="login-icon">🗺️</div>
+                <h2>Mapa de Riesgo GRD</h2>
+                <p>Ingresa tus credenciales para continuar</p>
+            </div>
+            <form id="login-form" class="login-form">
+                <div class="login-field">
+                    <label for="login-username">Usuario</label>
+                    <input type="text" id="login-username" placeholder="Nombre de usuario" autocomplete="username" required>
+                </div>
+                <div class="login-field">
+                    <label for="login-password">Contraseña</label>
+                    <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password" required>
+                </div>
+                <div id="login-error" class="login-error" style="display:none;"></div>
+                <button type="submit" id="login-btn" class="login-btn">Iniciar Sesión</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ===== USER BAR ===== -->
+    <div id="user-bar" class="user-bar" style="display:none;">
+        <span id="user-info" class="user-info"></span>
+        <button id="btn-descargar-kml" class="btn-kml" onclick="descargarKML()">
+            ↓ KML
+        </button>
+        <button id="btn-descargar-pdf" class="btn-kml" onclick="descargarPDF()">
+            ↓ PDF
+        </button>
+        <button class="btn-logout" onclick="logout()">Salir</button>
+    </div>
+
+    <!-- ===== CLASSES EDIT PANEL ===== -->
+    <div id="clases-panel" class="clases-panel" style="display:none;">
+        <div class="clases-panel-header">
+            <h3>Editar Clases</h3>
+            <span class="clases-panel-close" onclick="cerrarPanelClases()">&times;</span>
+        </div>
+        <div class="clases-panel-content" id="clases-panel-content">
+            <p style="text-align:center;color:#64748b;font-family:'Space Mono',monospace;font-size:11px;">Cargando clases...</p>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Floating button: indicators (left) -->
+    <button class="stats-button" onclick="toggleStatsPanel()">
+        <span class="icon">◈</span>
+        <span>Indicadores</span>
+    </button>
+
+    <!-- Floating button: chart (right) -->
+    <button class="chart-button" onclick="toggleChartPanel()">
+        <span class="icon">◎</span>
+        <span>Estadísticas</span>
+    </button>
+
+    <!-- Left panel: indicators -->
+    <div id="stats-panel" class="stats-panel">
+        <div class="stats-header">
+            <h3>Indicadores de Riesgo</h3>
+            <span class="stats-close" onclick="toggleStatsPanel()">&times;</span>
+        </div>
+        <div class="stats-content">
+            <button id="btnVistaGeneral" class="vista-general-btn" onclick="volverVistaGeneral()" style="display:none;">
+                ← Riesgo General
+            </button>
+            <div id="indicadores-container">
+                <p style="text-align:center;color:#64748b;font-family:'Space Mono',monospace;font-size:11px;">Cargando indicadores...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right panel: chart -->
+    <div id="chart-panel" class="chart-panel">
+        <div class="chart-panel-header">
+            <h3>Estadísticas de Riesgo</h3>
+            <span class="chart-panel-close" onclick="toggleChartPanel()">&times;</span>
+        </div>
+        <div class="chart-panel-content">
+            <div class="chart-container">
+                <div class="chart-title" id="chart-title">Distribución de Riesgo General</div>
+                <canvas id="riesgoChart"></canvas>
+            </div>
+            <div class="stats-summary" id="stats-summary"></div>
+        </div>
+    </div>
+
+    <!-- Right panel: property details -->
+    <div id="info-panel" class="info-panel" style="display:none;">
+        <div class="panel-header">
+            <h3 id="panel-title">Detalles del Inmueble</h3>
+            <span class="panel-close" onclick="cerrarPanel()">&times;</span>
+        </div>
+        <div class="panel-content" id="panel-content">
+            <p style="text-align:center;color:#64748b;font-family:'Space Mono',monospace;font-size:11px;">Selecciona un inmueble en el mapa</p>
+        </div>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+</body>
+</html>
