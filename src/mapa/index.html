@@ -3,118 +3,244 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GRD · Mapa de Riesgo</title>
-    <!-- Fonts -->
+    <title>Consola GRD · Riesgo por inmueble</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
-    <!-- ===== LOGIN MODAL ===== -->
-    <div id="login-modal" class="login-overlay">
-        <div class="login-card">
-            <div class="login-header">
-                <div class="login-icon">🗺️</div>
-                <h2>Mapa de Riesgo GRD</h2>
-                <p>Ingresa tus credenciales para continuar</p>
+    <!-- ===================== ACCESO (LOGIN) ===================== -->
+    <div id="login-modal" class="login-screen">
+        <div class="login-left">
+            <div class="login-brand">
+                <span class="brand-mark brand-mark--lg" aria-hidden="true">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg>
+                </span>
+                <div class="brand-text">
+                    <div class="brand-name brand-name--lg">Riesgo GRD</div>
+                    <div class="brand-kicker">Gestión de riesgo de desastres</div>
+                </div>
             </div>
-            <form id="login-form" class="login-form">
-                <div class="login-field">
-                    <label for="login-username">Usuario</label>
-                    <input type="text" id="login-username" placeholder="Nombre de usuario" autocomplete="username" required>
+
+            <div class="login-form-wrap">
+                <h1 class="login-title">Catastro de riesgo por inmueble</h1>
+                <p class="login-lede">Acceso restringido a personal autorizado. La sesión queda registrada para trazabilidad de las evaluaciones.</p>
+
+                <form id="login-form" class="login-form" novalidate>
+                    <div class="login-field">
+                        <label for="login-username">Usuario institucional</label>
+                        <div class="field-pill">
+                            <svg class="field-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            <input type="text" id="login-username" placeholder="nombre.apellido" autocomplete="username" required>
+                        </div>
+                    </div>
+
+                    <div class="login-field">
+                        <label for="login-password">Contraseña</label>
+                        <div class="field-pill">
+                            <svg class="field-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                            <input type="password" id="login-password" placeholder="••••••••••" autocomplete="current-password" required>
+                        </div>
+                    </div>
+
+                    <div id="login-error" class="login-error" hidden></div>
+
+                    <div class="login-actions">
+                        <button type="submit" id="login-btn" class="btn btn--primary btn--lg">
+                            Ingresar
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                        </button>
+                        <a class="login-link" href="#recuperar">Recuperar acceso</a>
+                    </div>
+                </form>
+            </div>
+
+            <div class="login-footer">
+                <span>Unidad de Gestión de Riesgo</span>
+                <span class="dot-sep" aria-hidden="true"></span>
+                <span id="login-footer-meta">Sitio Patrimonio Mundial de Valparaíso</span>
+            </div>
+        </div>
+
+        <div class="login-right">
+            <img class="login-photo" src="assets/login-territorio.jpg" alt="">
+            <div class="login-photo-overlay"></div>
+            <div class="login-photo-content">
+                <span class="photo-chip">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5"/></svg>
+                    <span id="photo-chip-text">Amenazas monitoreadas</span>
+                </span>
+                <div class="photo-headline" id="photo-headline">Catastro predial del sitio patrimonial</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================== CONSOLA ===================== -->
+    <div id="app-shell" class="app-shell" hidden>
+
+        <!-- ---------- Barra superior ---------- -->
+        <header class="topbar">
+            <div class="brand">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></svg>
+                </span>
+                <div class="brand-text">
+                    <div class="brand-name">Riesgo GRD</div>
+                    <div class="brand-sub" id="contexto-territorial">Cargando contexto…</div>
                 </div>
-                <div class="login-field">
-                    <label for="login-password">Contraseña</label>
-                    <input type="password" id="login-password" placeholder="Contraseña" autocomplete="current-password" required>
-                </div>
-                <div id="login-error" class="login-error" style="display:none;"></div>
-                <button type="submit" id="login-btn" class="login-btn">Iniciar Sesión</button>
-            </form>
-        </div>
-    </div>
+            </div>
 
-    <!-- ===== USER BAR ===== -->
-    <div id="user-bar" class="user-bar" style="display:none;">
-        <span id="user-info" class="user-info"></span>
-        <button id="btn-descargar-kml" class="btn-kml" onclick="descargarKML()">
-            ↓ KML
-        </button>
-        <button id="btn-descargar-pdf" class="btn-kml" onclick="descargarPDF()">
-            ↓ PDF
-        </button>
-        <button class="btn-logout" onclick="logout()">Salir</button>
-    </div>
-
-    <!-- ===== CLASSES EDIT PANEL ===== -->
-    <div id="clases-panel" class="clases-panel" style="display:none;">
-        <div class="clases-panel-header">
-            <h3>Editar Clases</h3>
-            <span class="clases-panel-close" onclick="cerrarPanelClases()">&times;</span>
-        </div>
-        <div class="clases-panel-content" id="clases-panel-content">
-            <p style="text-align:center;color:#64748b;font-family:'Space Mono',monospace;font-size:11px;">Cargando clases...</p>
-        </div>
-    </div>
-
-    <div id="map"></div>
-
-    <!-- Floating button: indicators (left) -->
-    <button class="stats-button" onclick="toggleStatsPanel()">
-        <span class="icon">◈</span>
-        <span>Indicadores</span>
-    </button>
-
-    <!-- Floating button: chart (right) -->
-    <button class="chart-button" onclick="toggleChartPanel()">
-        <span class="icon">◎</span>
-        <span>Estadísticas</span>
-    </button>
-
-    <!-- Left panel: indicators -->
-    <div id="stats-panel" class="stats-panel">
-        <div class="stats-header">
-            <h3>Indicadores de Riesgo</h3>
-            <span class="stats-close" onclick="toggleStatsPanel()">&times;</span>
-        </div>
-        <div class="stats-content">
-            <button id="btnVistaGeneral" class="vista-general-btn" onclick="volverVistaGeneral()" style="display:none;">
-                ← Riesgo General
+            <button class="icon-btn topbar-toggle" id="btn-toggle-left" title="Mostrar u ocultar composición del riesgo" aria-label="Mostrar u ocultar composición del riesgo">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="20" cy="14" r="2"/></svg>
             </button>
-            <div id="indicadores-container">
-                <p style="text-align:center;color:#64748b;font-family:'Space Mono',monospace;font-size:11px;">Cargando indicadores...</p>
+
+            <div class="amenaza-selector" id="amenaza-selector" role="tablist" aria-label="Amenaza"></div>
+
+            <div class="topbar-search">
+                <div class="field-pill field-pill--search">
+                    <svg class="field-icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+                    <input type="search" id="search-input" placeholder="Dirección, rol SII o manzana" autocomplete="off">
+                </div>
+                <div class="search-results" id="search-results" hidden></div>
+            </div>
+
+            <div class="topbar-actions">
+                <div class="menu-wrap">
+                    <button class="btn btn--ghost" id="btn-export" aria-haspopup="true" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+                        Exportar
+                    </button>
+                    <div class="menu" id="export-menu" hidden>
+                        <button class="menu-item" id="btn-descargar-kml">
+                            <span class="menu-item-title">KML</span>
+                            <span class="menu-item-sub">Detalle por indicador · Google Earth</span>
+                        </button>
+                        <button class="menu-item" id="btn-descargar-pdf">
+                            <span class="menu-item-title">PDF resumen</span>
+                            <span class="menu-item-sub">Reporte global de la amenaza</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="menu-wrap">
+                    <button class="user-chip" id="user-chip" aria-haspopup="true" aria-expanded="false">
+                        <span class="avatar" id="user-avatar">··</span>
+                        <span class="user-chip-text">
+                            <span class="user-chip-name" id="user-chip-name">—</span>
+                            <span class="user-chip-role" id="user-chip-role">—</span>
+                        </span>
+                    </button>
+                    <div class="menu menu--right" id="user-menu" hidden>
+                        <button class="menu-item" id="btn-logout">
+                            <span class="menu-item-title">Cerrar sesión</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- ---------- Panel izquierdo: composición del riesgo ---------- -->
+        <aside class="panel panel--left" id="stats-panel" aria-label="Composición del riesgo">
+            <div class="panel-head">
+                <div class="kicker">Composición del riesgo</div>
+                <h2 class="panel-title" id="amenaza-titulo">—</h2>
+                <div class="segmented" id="vista-segmented" role="tablist">
+                    <button type="button" class="segmented-opt is-active" data-vista="total" role="tab" aria-selected="true">Riesgo total</button>
+                    <button type="button" class="segmented-opt" data-vista="indicador" role="tab" aria-selected="false">Por indicador</button>
+                </div>
+            </div>
+
+            <div class="panel-body" id="indicadores-container">
+                <p class="panel-placeholder">Cargando indicadores…</p>
+            </div>
+
+            <div class="ponderadores-card" id="ponderadores-card" hidden>
+                <div class="ponderadores-head">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="20" cy="14" r="2"/></svg>
+                    Ponderadores
+                </div>
+                <p class="ponderadores-text">Pesos y clases definidos por la unidad técnica. La edición afecta el cálculo de todos los inmuebles.</p>
+                <button class="btn btn--deep" id="btn-administrar-clases">Administrar clases</button>
+            </div>
+        </aside>
+
+        <!-- ---------- Mapa ---------- -->
+        <main class="map-area">
+            <div id="map"></div>
+
+            <div class="legend-card" id="legend-card">
+                <div class="legend-head">
+                    <span class="legend-title">Nivel de riesgo</span>
+                    <span class="legend-total" id="legend-total">—</span>
+                </div>
+                <div id="legend-rows"></div>
+                <div class="legend-foot" id="legend-foot">Suma ponderada de indicadores, escala 0–4.</div>
+            </div>
+
+            <div class="map-controls">
+                <button class="map-ctrl" id="btn-zoom-in" title="Acercar" aria-label="Acercar">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                </button>
+                <button class="map-ctrl" id="btn-zoom-out" title="Alejar" aria-label="Alejar">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M5 12h14"/></svg>
+                </button>
+                <button class="map-ctrl" id="btn-centrar" title="Centrar mapa" aria-label="Centrar mapa">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+                </button>
+            </div>
+
+            <div class="scale-pill">© OpenStreetMap · CARTO</div>
+        </main>
+
+        <!-- ---------- Panel derecho: ficha del inmueble ---------- -->
+        <aside class="panel panel--right" id="info-panel" aria-label="Ficha del inmueble">
+            <div class="ficha-head">
+                <div class="ficha-head-row">
+                    <div>
+                        <div class="kicker">Inmueble seleccionado</div>
+                        <h2 class="ficha-address" id="panel-title">—</h2>
+                    </div>
+                    <button class="icon-btn icon-btn--round" id="btn-cerrar-ficha" title="Cerrar ficha" aria-label="Cerrar ficha">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                    </button>
+                </div>
+                <div class="ficha-meta" id="ficha-meta"></div>
+            </div>
+
+            <div class="ficha-body" id="panel-content"></div>
+
+            <div class="ficha-foot" id="ficha-foot" hidden>
+                <button class="btn btn--primary btn--block" id="btn-editar-inmueble">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>
+                    Editar datos
+                </button>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ===================== Panel de clases (editor) ===================== -->
+    <div id="clases-panel" class="modal" hidden>
+        <div class="modal-backdrop" id="clases-backdrop"></div>
+        <div class="modal-card">
+            <div class="modal-head">
+                <div>
+                    <div class="kicker">Ponderadores</div>
+                    <h2 class="modal-title">Administrar clases</h2>
+                </div>
+                <button class="icon-btn icon-btn--round" id="btn-cerrar-clases" title="Cerrar" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div class="modal-body" id="clases-panel-content">
+                <p class="panel-placeholder">Cargando clases…</p>
             </div>
         </div>
     </div>
 
-    <!-- Right panel: chart -->
-    <div id="chart-panel" class="chart-panel">
-        <div class="chart-panel-header">
-            <h3>Estadísticas de Riesgo</h3>
-            <span class="chart-panel-close" onclick="toggleChartPanel()">&times;</span>
-        </div>
-        <div class="chart-panel-content">
-            <div class="chart-container">
-                <div class="chart-title" id="chart-title">Distribución de Riesgo General</div>
-                <canvas id="riesgoChart"></canvas>
-            </div>
-            <div class="stats-summary" id="stats-summary"></div>
-        </div>
-    </div>
-
-    <!-- Right panel: property details -->
-    <div id="info-panel" class="info-panel" style="display:none;">
-        <div class="panel-header">
-            <h3 id="panel-title">Detalles del Inmueble</h3>
-            <span class="panel-close" onclick="cerrarPanel()">&times;</span>
-        </div>
-        <div class="panel-content" id="panel-content">
-            <p style="text-align:center;color:#64748b;font-family:'Space Mono',monospace;font-size:11px;">Selecciona un inmueble en el mapa</p>
-        </div>
-    </div>
+    <!-- ===================== Toast ===================== -->
+    <div id="toast" class="toast" hidden></div>
 
     <script type="module" src="/main.js"></script>
 </body>
