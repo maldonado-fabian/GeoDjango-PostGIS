@@ -33,7 +33,7 @@ class InformeDocTemplate(BaseDocTemplate):
     página cae cada título y la segunda lo escribe.
     """
 
-    def __init__(self, buf, *, titulo, subtitulo, restringido=False, **kw):
+    def __init__(self, buf, *, titulo, subtitulo, **kw):
         super().__init__(
             buf, pagesize=A4,
             leftMargin=MARGIN, rightMargin=MARGIN,
@@ -42,7 +42,6 @@ class InformeDocTemplate(BaseDocTemplate):
         )
         self.titulo = titulo
         self.subtitulo = subtitulo
-        self.restringido = restringido
 
         marco = Frame(
             self.leftMargin, self.bottomMargin,
@@ -57,15 +56,7 @@ class InformeDocTemplate(BaseDocTemplate):
 
     def _portada(self, canvas, doc):
         """La portada no lleva cabecera ni numeración."""
-        canvas.saveState()
-        if self.restringido:
-            canvas.setFont('Helvetica', 7)
-            canvas.setFillColor(colors.HexColor('#8a8a8a'))
-            canvas.drawCentredString(
-                A4[0] / 2, MARGIN * 0.6,
-                'Documento de circulación restringida · contiene identificación de inmuebles',
-            )
-        canvas.restoreState()
+        pass
 
     def _decorar(self, canvas, doc):
         canvas.saveState()
@@ -84,11 +75,6 @@ class InformeDocTemplate(BaseDocTemplate):
         canvas.line(MARGIN, pie_y + 0.34 * cm, A4[0] - MARGIN, pie_y + 0.34 * cm)
         canvas.setFont('Helvetica', 7.5)
         canvas.drawCentredString(A4[0] / 2, pie_y, str(canvas.getPageNumber()))
-
-        if self.restringido:
-            canvas.setFont('Helvetica', 6.5)
-            canvas.setFillColor(colors.HexColor('#a0a0a0'))
-            canvas.drawString(MARGIN, pie_y, 'Circulación restringida')
 
         if charts.basemap_degradado:
             canvas.setFont('Helvetica-Oblique', 6.5)
@@ -122,10 +108,10 @@ def indice():
     return toc
 
 
-def construir(story, *, titulo, subtitulo, restringido=False, con_indice=True):
+def construir(story, *, titulo, subtitulo, con_indice=True):
     """Arma el PDF y devuelve sus bytes."""
     buf = BytesIO()
-    doc = InformeDocTemplate(buf, titulo=titulo, subtitulo=subtitulo, restringido=restringido)
+    doc = InformeDocTemplate(buf, titulo=titulo, subtitulo=subtitulo)
     if con_indice:
         # Dos pasadas para resolver los números de página del índice.
         doc.multiBuild(story)

@@ -146,88 +146,26 @@ def donut(filas, titulo, *, dpi=None, compacto=False, sin_titulo=False):
     return _png(fig, dpi or DPI_DONA)
 
 
-def barras_aporte(df, titulo, *, dpi=None, max_filas=None):
-    """Aporte de cada sub-indicador al índice, coloreado por clasificación.
+def barras_aporte(df, titulo, *, dpi=None):
+    """Cuánto aporta cada factor al índice de riesgo, de mayor a menor.
 
-    Es el gráfico que se lee de un vistazo; la dispersión de más abajo es su
-    justificación. `df` viene de `analytics.diagnostico`.
+    `df` viene de `analytics.aporte_por_factor`: columnas factor_nombre,
+    valor_medio, aporte_pct. Barras de un solo color, ordenadas por aporte.
     """
-    from .analytics import SISTEMICO, DIFERENCIADOR, SECUNDARIO
+    datos = df.iloc[::-1]  # barh dibuja de abajo hacia arriba
 
-    datos = df.head(max_filas) if max_filas else df
-    datos = datos.iloc[::-1]  # barh dibuja de abajo hacia arriba
-
-    color_clase = {
-        SISTEMICO: '#2f6f8f',
-        DIFERENCIADOR: '#cc5200',
-        SECUNDARIO: '#7d8285',
-    }
-    colores = [color_clase.get(c, '#c7cbcc') for c in datos['clasificacion']]
-
-    alto = max(2.6, 0.26 * len(datos) + 0.9)
-    fig, ax = plt.subplots(figsize=(7.2, alto))
-    ax.barh(datos['factor_nombre'], datos['aporte_pct'], color=colores, height=0.68)
+    alto = max(2.4, 0.32 * len(datos) + 0.8)
+    fig, ax = plt.subplots(figsize=(6.6, alto))
+    ax.barh(datos['factor_nombre'], datos['aporte_pct'], color='#2f6f8f', height=0.62)
 
     for y, (pct, medio) in enumerate(zip(datos['aporte_pct'], datos['valor_medio'])):
-        ax.text(pct + 0.15, y, f'{pct:.1f}%  (media {medio:.2f})'.replace('.', ','),
+        ax.text(pct + 0.15, y, f'{pct:.0f}%  (promedio {medio:.2f})'.replace('.', ','),
                 va='center', fontsize=6.5, color='#5b5f60')
 
     ax.set_xlabel('Aporte al índice de riesgo', fontsize=7)
-    ax.set_xlim(0, datos['aporte_pct'].max() * 1.38)
+    ax.set_xlim(0, datos['aporte_pct'].max() * 1.42)
     ax.tick_params(axis='y', labelsize=7)
     ax.tick_params(axis='x', labelsize=6.5)
-    ax.set_title(titulo, fontsize=8.5, fontweight='bold', pad=8)
-    for lado in ('top', 'right'):
-        ax.spines[lado].set_visible(False)
-
-    handles = [Patch(facecolor=c, label=k) for k, c in color_clase.items()]
-    ax.legend(handles=handles, loc='lower right', fontsize=6.5, frameon=False)
-    return _png(fig, dpi or DPI_DONA)
-
-
-def dispersion_aporte_correlacion(df, titulo, *, umbral_correlacion=0.40, dpi=None):
-    """Aporte frente a capacidad de discriminar, con cuadrantes.
-
-    Cada punto es un sub-indicador, numerado según su fila en la tabla que
-    acompaña la figura: veinte nombres sobre la dispersión son ilegibles.
-
-    Los sub-indicadores sin variación (todos los inmuebles con el mismo puntaje)
-    se marcan aparte: su correlación es cero por construcción, y ese es el
-    hallazgo sistémico más fuerte que puede producir el análisis.
-    """
-    fig, ax = plt.subplots(figsize=(6.6, 4.4))
-
-    corte_aporte = df.attrs.get('corte_aporte', df['aporte_pct'].median())
-    ax.axvline(umbral_correlacion, color='#98a0a3', lw=0.8, ls='--')
-    ax.axhline(corte_aporte, color='#98a0a3', lw=0.8, ls='--')
-
-    x_max = max(df['correlacion'].abs().max() * 1.25, umbral_correlacion * 1.8, 0.7)
-    y_max = df['aporte_pct'].max() * 1.22
-
-    ax.text(umbral_correlacion / 2, y_max * 0.97, 'SISTÉMICO', fontsize=7,
-            fontweight='bold', color='#2f6f8f', ha='center', va='top')
-    ax.text((umbral_correlacion + x_max) / 2, y_max * 0.97, 'DIFERENCIADOR', fontsize=7,
-            fontweight='bold', color='#cc5200', ha='center', va='top')
-
-    constantes = df['sin_variacion']
-    ax.scatter(df.loc[~constantes, 'correlacion'], df.loc[~constantes, 'aporte_pct'],
-               s=46, color='#2f6f8f', alpha=0.80, zorder=3, edgecolor='white', linewidth=0.6)
-    if constantes.any():
-        ax.scatter(df.loc[constantes, 'correlacion'], df.loc[constantes, 'aporte_pct'],
-                   s=70, marker='D', color='#c20000', alpha=0.85, zorder=4,
-                   edgecolor='white', linewidth=0.6, label='sin variación entre inmuebles')
-        ax.legend(loc='lower right', fontsize=6.5, frameon=False)
-
-    for n, (_, fila) in enumerate(df.iterrows(), start=1):
-        ax.annotate(str(n), (fila['correlacion'], fila['aporte_pct']),
-                    fontsize=6, color='#1c1c1a', zorder=5,
-                    xytext=(5, 3), textcoords='offset points')
-
-    ax.set_xlim(min(0, df['correlacion'].min() * 1.2), x_max)
-    ax.set_ylim(0, y_max)
-    ax.set_xlabel('Correlación con el resto del índice  →  discrimina entre inmuebles', fontsize=7)
-    ax.set_ylabel('Aporte al índice (%)', fontsize=7)
-    ax.tick_params(labelsize=6.5)
     ax.set_title(titulo, fontsize=8.5, fontweight='bold', pad=8)
     for lado in ('top', 'right'):
         ax.spines[lado].set_visible(False)

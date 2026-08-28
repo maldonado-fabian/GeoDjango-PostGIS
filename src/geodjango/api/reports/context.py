@@ -116,33 +116,10 @@ class ReportContext:
     # ── análisis ─────────────────────────────────────────────────────────────
 
     @cached_property
-    def diagnostico(self):
-        """Diagnóstico al nivel de los sub-indicadores."""
-        return analytics.diagnostico(
-            self.contribuciones, self.cfg.umbral_correlacion,
-            nivel=analytics.NIVEL_SUBINDICADOR)
-
-    @cached_property
-    def diagnostico_indicadores(self):
-        """El mismo análisis agregado a los indicadores primarios."""
-        return analytics.diagnostico(
-            self.contribuciones, self.cfg.umbral_correlacion,
-            nivel=analytics.NIVEL_INDICADOR)
+    def aporte_indicadores(self):
+        """Cuánto aporta cada indicador primario al índice de riesgo."""
+        return analytics.aporte_por_factor(self.contribuciones, nivel=analytics.NIVEL_INDICADOR)
 
     @cached_property
     def distribucion(self):
         return analytics.resumen_distribucion(self.indice())
-
-    # ── capacidades ──────────────────────────────────────────────────────────
-
-    @cached_property
-    def capacidades(self):
-        """Qué secciones tienen datos para existir.
-
-        Una sección sin datos se omite con una nota, en vez de producir una
-        página vacía o reventar el worker.
-        """
-        caps = set()
-        if not self.diagnostico.empty:
-            caps.add('diagnostico')
-        return frozenset(caps)

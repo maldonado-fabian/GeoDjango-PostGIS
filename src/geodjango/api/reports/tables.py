@@ -3,7 +3,6 @@
 from reportlab.platypus import Table, TableStyle
 
 from . import niveles, styles
-from .analytics import ORDEN_CLASIFICACION
 from .styles import CELDA, GRIS, FONDO_CABECERA, USABLE_W
 
 
@@ -150,92 +149,21 @@ def distribucion(resumen, nombre_amenaza):
     return t
 
 
-def diagnostico(df, etiqueta='SUB-INDICADOR'):
-    """Factores ordenados por aporte, con su clasificación.
-
-    El número de la primera columna es la clave con la dispersión: allí los
-    puntos van numerados porque veinte nombres no caben en el gráfico.
-
-    En el nivel de indicador primario la columna de grupo queda vacía y se
-    omite, porque un indicador no pertenece a otro.
-    """
-    con_grupo = df['grupo'].astype(str).str.strip().ne('').any()
-
-    cabecera = ['Nº', etiqueta]
-    if con_grupo:
-        cabecera.append('INDICADOR')
-    cabecera += ['MEDIA', 'APORTE', 'CORR.', '% ALTO', 'CLASIFICACIÓN']
-    data = [cabecera]
-
-    estilos = _base(fontsize=6.5)
-    estilos.append(('ALIGN', (1, 1), (2 if con_grupo else 1, -1), 'LEFT'))
-    col_corr = 5 if con_grupo else 4
+def aporte(df, etiqueta='INDICADOR'):
+    """Factores ordenados por aporte al índice: nombre, promedio, aporte %."""
+    data = [['Nº', etiqueta, 'PROMEDIO', 'APORTE AL ÍNDICE']]
+    estilos = _base(fontsize=7)
+    estilos.append(('ALIGN', (1, 1), (1, -1), 'LEFT'))
 
     for i, (_, fila) in enumerate(df.iterrows(), start=1):
-        celdas = [str(i), styles.parrafo_celda(fila['factor_nombre'], CELDA)]
-        if con_grupo:
-            celdas.append(styles.parrafo_celda(fila['grupo'], CELDA))
-        celdas += [
-            _num(fila['valor_medio']),
-            f"{_num(fila['aporte_pct'], 1)}%",
-            '—' if fila['sin_variacion'] else _num(fila['correlacion']),
-            f"{fila['pct_alto']:.0f}%",
-            fila['clasificacion'],
-        ]
-        data.append(celdas)
-        if fila['sin_variacion']:
-            estilos.append(('TEXTCOLOR', (col_corr, i), (col_corr, i),
-                            styles.colors.HexColor('#c20000')))
-
-    anchos = ([0.04, 0.26, 0.19, 0.08, 0.09, 0.08, 0.09, 0.17] if con_grupo
-              else [0.05, 0.36, 0.10, 0.11, 0.10, 0.10, 0.18])
-    t = Table(data, colWidths=[USABLE_W * a for a in anchos], repeatRows=1)
-    t.setStyle(TableStyle(estilos))
-    return t
-
-
-def clasificacion_resumen(df, descripciones):
-    """Qué significa cada clasificación y qué sub-indicadores cayeron en ella."""
-    data = [['CLASIFICACIÓN', 'QUÉ IMPLICA', 'SUB-INDICADORES']]
-    estilos = _base(fontsize=7)
-    estilos.append(('ALIGN', (1, 1), (2, -1), 'LEFT'))
-
-    for i, clase in enumerate(ORDEN_CLASIFICACION, start=1):
-        subset = df[df['clasificacion'] == clase]
-        if subset.empty:
-            continue
-        nombres = ', '.join(subset['factor_nombre'])
         data.append([
-            styles.parrafo_celda(f'<b>{clase}</b> ({len(subset)})', CELDA),
-            styles.parrafo_celda(descripciones[clase], CELDA),
-            styles.parrafo_celda(nombres, CELDA),
+            str(i),
+            styles.parrafo_celda(fila['factor_nombre'], CELDA),
+            _num(fila['valor_medio']),
+            f"{fila['aporte_pct']:.0f}%",
         ])
 
-    t = Table(data, colWidths=[USABLE_W * 0.15, USABLE_W * 0.42, USABLE_W * 0.43], repeatRows=1)
-    t.setStyle(TableStyle(estilos))
-    return t
-
-
-def pesos(indicadores_df, contribuciones_df):
-    """Anexo metodológico: pesos de indicadores y sub-indicadores."""
-    data = [['INDICADOR', 'PESO', 'SUB-INDICADOR', 'PESO REL.', 'PESO EFECTIVO']]
-    estilos = _base(fontsize=6.5)
-    estilos.append(('ALIGN', (0, 1), (0, -1), 'LEFT'))
-    estilos.append(('ALIGN', (2, 1), (2, -1), 'LEFT'))
-
-    subs = contribuciones_df.drop_duplicates('subindicador_id')
-    for _, ind in indicadores_df.iterrows():
-        propios = subs[subs['indicador_nombre'] == ind['nombre']]
-        for j, (_, s) in enumerate(propios.iterrows()):
-            data.append([
-                styles.parrafo_celda(ind['nombre'] if j == 0 else '', CELDA),
-                f"{float(ind['peso']) * 100:.0f}%" if j == 0 else '',
-                styles.parrafo_celda(s['subindicador_nombre'], CELDA),
-                f"{s['peso_sub'] * 100:.1f}%".replace('.', ','),
-                f"{s['peso_sub'] * s['peso_ind'] * 100:.2f}%".replace('.', ','),
-            ])
-
-    anchos = [0.26, 0.10, 0.34, 0.15, 0.15]
+    anchos = [0.06, 0.58, 0.16, 0.20]
     t = Table(data, colWidths=[USABLE_W * a for a in anchos], repeatRows=1)
     t.setStyle(TableStyle(estilos))
     return t

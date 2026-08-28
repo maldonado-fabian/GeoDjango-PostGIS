@@ -1096,25 +1096,16 @@ document.getElementById('btn-descargar-kml').addEventListener('click', async () 
   }
 });
 
-const MODOS_INFORME = {
-  ejecutivo: { etiqueta: 'ejecutivo', archivo: 'Ejecutivo' },
-  completo: { etiqueta: 'completo', archivo: 'Completo' }
-};
-
-/** Encola el informe, hace polling del estado y descarga el PDF. */
-async function generarInforme(modo) {
+/** Encola el informe de la amenaza activa, hace polling del estado y lo descarga. */
+async function generarInforme() {
   cerrarMenus();
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const { etiqueta, archivo } = MODOS_INFORME[modo];
-  toast(`Generando informe ${etiqueta}…`);
+  toast('Generando informe…');
 
   try {
     const resGen = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/`, {
       method: 'POST',
-      body: JSON.stringify({
-        amenaza_id: state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO,
-        modo
-      })
+      body: JSON.stringify({ amenaza_id: state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO })
     });
     if (!resGen.ok) throw new Error('Error al iniciar la generación');
     const { task_id } = await resGen.json();
@@ -1130,20 +1121,17 @@ async function generarInforme(modo) {
 
     const resPdf = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/descargar/${task_id}/`);
     if (!resPdf.ok) throw new Error('Error al descargar el PDF');
-    // El nombre lleva amenaza y modo: sin eso los informes son
-    // indistinguibles en la carpeta de descargas.
+    // El nombre lleva la amenaza: el informe de Sismo y el de Incendio no
+    // deben quedar indistinguibles en la carpeta de descargas.
     const nombre = (state.amenazaActiva?.nombre || 'Riesgo').replace(/\s+/g, '_');
-    descargarBlob(await resPdf.blob(), `Informe_${nombre}_${archivo}.pdf`);
+    descargarBlob(await resPdf.blob(), `Informe_${nombre}.pdf`);
     toast('Informe descargado.', 'ok');
   } catch (e) {
-    if (e.message !== 'Session expired') toast(`No se pudo generar el informe ${etiqueta}.`, 'error');
+    if (e.message !== 'Session expired') toast('No se pudo generar el informe.', 'error');
   }
 }
 
-document.getElementById('btn-pdf-ejecutivo')
-  .addEventListener('click', () => generarInforme('ejecutivo'));
-document.getElementById('btn-pdf-completo')
-  .addEventListener('click', () => generarInforme('completo'));
+document.getElementById('btn-descargar-pdf').addEventListener('click', generarInforme);
 
 function descargarBlob(blob, nombre) {
   const url = URL.createObjectURL(blob);

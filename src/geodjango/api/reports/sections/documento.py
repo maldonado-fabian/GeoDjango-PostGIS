@@ -1,4 +1,4 @@
-"""Secciones de marco: portada, índice, resumen ejecutivo, globales, cierre."""
+"""Secciones de marco: portada, índice, resultados globales, conclusiones."""
 
 from datetime import datetime
 
@@ -8,8 +8,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, Spacer
 
 from .. import charts, doctemplate, niveles, tables, text
-from ..config import MODO_COMPLETO, MODO_EJECUTIVO
-from ..styles import BODY, CAPTION, H1, H2, NOTA, SUBTITULO, TITULO
+from ..styles import BODY, CAPTION, H1, H2, SUBTITULO, TITULO, USABLE_W, imagen
 from . import seccion
 
 
@@ -20,7 +19,6 @@ def _p(txt, estilo=BODY):
 @seccion('portada', 'Portada', 100)
 def portada(ctx, cfg):
     centrado = ParagraphStyle('centrado', parent=BODY, alignment=TA_CENTER)
-    modo = 'Versión ejecutiva' if cfg.modo == MODO_EJECUTIVO else 'Versión completa'
     dist = ctx.distribucion
 
     partes = [
@@ -29,7 +27,7 @@ def portada(ctx, cfg):
         Spacer(1, 0.6 * cm),
         _p(f'Amenaza: {ctx.nombre_amenaza}', SUBTITULO),
         Spacer(1, 1.4 * cm),
-        _p(f'{modo} · generado el {datetime.now().strftime("%d-%m-%Y %H:%M")}', centrado),
+        _p(f'Generado el {datetime.now().strftime("%d-%m-%Y %H:%M")}', centrado),
     ]
     if dist:
         partes.append(_p(
@@ -44,21 +42,6 @@ def indice(ctx, cfg):
     if not cfg.incluir_indice:
         return []
     return [_p('Índice', H1), doctemplate.indice()]
-
-
-@seccion('resumen_ejecutivo', 'Resumen ejecutivo', 200)
-def resumen_ejecutivo(ctx, cfg):
-    """Hallazgos con su número y la decisión que implica cada uno."""
-    partes = [_p('Resumen ejecutivo', H1),
-              _p(text.intro_resumen_ejecutivo(ctx.nombre_amenaza), BODY),
-              Spacer(1, 0.3 * cm)]
-
-    for i, hallazgo in enumerate(text.hallazgos(ctx), start=1):
-        partes.append(_p(f'<b>{i}. {hallazgo["titulo"]}</b>', BODY))
-        partes.append(_p(hallazgo['cuerpo'], BODY))
-        partes.append(_p(f'<b>Implicancia:</b> {hallazgo["implicancia"]}', NOTA))
-        partes.append(Spacer(1, 0.25 * cm))
-    return partes
 
 
 @seccion('globales', 'Resultados globales', 300)
@@ -101,34 +84,11 @@ def globales(ctx, cfg):
             _p(text.parrafo_distribucion(ctx.distribucion, ctx.nombre_amenaza), BODY),
             tables.distribucion(ctx.distribucion, ctx.nombre_amenaza),
             _p(f'Tabla {ctx.tabla.siguiente()}. Estadística descriptiva del índice de riesgo.', CAPTION),
-            charts_imagen(charts.distribucion_indice(
-                series, 'DISTRIBUCIÓN DEL ÍNDICE DE RIESGO', dpi=cfg.dpi_dona)),
+            imagen(charts.distribucion_indice(
+                series, 'DISTRIBUCIÓN DEL ÍNDICE DE RIESGO', dpi=cfg.dpi_dona), USABLE_W * 0.94),
             _p(f'Figura {ctx.figura.siguiente()}. Distribución del índice sobre las bandas de nivel.',
                CAPTION),
         ]
-    return partes
-
-
-def charts_imagen(png):
-    from ..styles import USABLE_W, imagen
-    return imagen(png, USABLE_W * 0.94)
-
-
-@seccion('metodologia', 'Metodología', 350, modos=(MODO_COMPLETO,))
-def metodologia(ctx, cfg):
-    faltantes = text.cobertura_faltante(ctx)
-    partes = [
-        _p('Metodología', H1),
-        _p(text.parrafo_metodologia(ctx), BODY),
-        Spacer(1, 0.3 * cm),
-        _p('Ponderadores', H2),
-        _p(text.parrafo_pesos(), BODY),
-        tables.pesos(ctx.indicadores, ctx.contribuciones),
-        _p(f'Tabla {ctx.tabla.siguiente()}. Pesos de indicadores y sub-indicadores.', CAPTION),
-        Spacer(1, 0.3 * cm),
-        _p('Cobertura de la evaluación', H2),
-        _p(faltantes, BODY),
-    ]
     return partes
 
 
@@ -136,10 +96,6 @@ def metodologia(ctx, cfg):
 def conclusiones(ctx, cfg):
     filas = ctx.filas_nivel()
     return [
-        _p('Conclusiones y acciones recomendadas', H1),
+        _p('Conclusiones y comentarios', H1),
         _p(text.conclusiones(filas, ctx.nombre_amenaza), BODY),
-        Spacer(1, 0.3 * cm),
-        _p('Acciones priorizadas', H2),
-        *[_p(f'<b>{i}.</b> {accion}', BODY)
-          for i, accion in enumerate(text.acciones(ctx), start=1)],
     ]

@@ -6,17 +6,21 @@ Antes los primarios sólo tenían dona -sin mapa- y cada secundario ocupaba una
 página entera.
 """
 
-from reportlab.platypus import Paragraph
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, Spacer
 
 from .. import charts, niveles, tables, text
-from ..config import MODO_COMPLETO
-from ..styles import (BODY, CAPTION, H1, H2, ancho_tabla_compacta,
-                      figura_compacta, figura_compuesta, gdf_coloreado)
+from ..styles import (BODY, CAPTION, H1, H2, USABLE_W, ancho_tabla_compacta,
+                      figura_compacta, figura_compuesta, gdf_coloreado, imagen)
 from . import seccion
 
 
 def _p(txt, estilo=BODY):
     return Paragraph(txt, estilo)
+
+
+def _fig(png, ancho=0.94):
+    return imagen(png, USABLE_W * ancho)
 
 
 #: Largo máximo de una etiqueta de clase en la leyenda de un mapa. Por encima
@@ -76,10 +80,26 @@ def amenaza_detalle(ctx, cfg):
 
 @seccion('indicadores', 'Indicadores primarios', 900)
 def indicadores(ctx, cfg):
-    """Un bloque por indicador primario, con mapa. Dos por página."""
+    """Qué factores explican el riesgo, y luego un bloque por indicador con mapa."""
     total = ctx.total_inmuebles
-    partes = [
-        _p('Espacialización de los indicadores primarios', H1),
+    partes = [_p('Indicadores primarios', H1)]
+
+    aporte = ctx.aporte_indicadores
+    if not aporte.empty:
+        partes += [
+            _p('Qué factores explican el riesgo', H2),
+            _p(text.intro_factores(), BODY),
+            Spacer(1, 0.2 * cm),
+            _fig(charts.barras_aporte(aporte, 'APORTE DE CADA INDICADOR AL ÍNDICE', dpi=cfg.dpi_dona)),
+            _p(f'Figura {ctx.figura.siguiente()}. Aporte de cada indicador primario al índice '
+               f'de riesgo.', CAPTION),
+            tables.aporte(aporte, etiqueta='INDICADOR'),
+            _p(f'Tabla {ctx.tabla.siguiente()}. Detalle ordenado por aporte al índice.', CAPTION),
+            Spacer(1, 0.3 * cm),
+        ]
+
+    partes += [
+        _p('Espacialización de los indicadores primarios', H2),
         _p(text.parrafo_indicadores_primarios(), BODY),
     ]
 
@@ -104,7 +124,7 @@ def indicadores(ctx, cfg):
     return partes
 
 
-@seccion('subindicadores', 'Indicadores secundarios', 1000, modos=(MODO_COMPLETO,))
+@seccion('subindicadores', 'Indicadores secundarios', 1000)
 def subindicadores(ctx, cfg):
     """Un bloque por sub-indicador, dos por página.
 

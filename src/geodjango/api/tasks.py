@@ -18,18 +18,14 @@ def _slug(texto):
 
 
 @shared_task(bind=True, soft_time_limit=600, time_limit=900)
-def generar_pdf_resumen_task(self, amenaza_id=1, modo='ejecutivo', opciones=None):
-    """Genera el informe y lo guarda en MEDIA_ROOT/reportes/.
+def generar_pdf_resumen_task(self, amenaza_id=1):
+    """Genera el informe de la amenaza y lo guarda en MEDIA_ROOT/reportes/.
 
-    El nombre del archivo lleva amenaza y modo: sin eso, dos informes distintos
-    llegan a la carpeta de descargas con nombres indistinguibles.
+    El nombre del archivo lleva la amenaza: sin eso, los informes de dos
+    amenazas distintas llegan a la carpeta de descargas con nombres
+    indistinguibles.
     """
-    cfg = ReportConfig.desde_dict({
-        'amenaza_id': int(amenaza_id),
-        'modo': modo,
-        **(opciones or {}),
-    })
-
+    cfg = ReportConfig(amenaza_id=int(amenaza_id))
     pdf_bytes = pdf.generar(cfg)
 
     from .reports import queries
@@ -38,9 +34,9 @@ def generar_pdf_resumen_task(self, amenaza_id=1, modo='ejecutivo', opciones=None
 
     carpeta = os.path.join(settings.MEDIA_ROOT, 'reportes')
     os.makedirs(carpeta, exist_ok=True)
-    nombre = f'riesgo_{nombre_amenaza}_{cfg.modo}_{self.request.id}.pdf'
+    nombre = f'riesgo_{nombre_amenaza}_{self.request.id}.pdf'
     ruta = os.path.join(carpeta, nombre)
     with open(ruta, 'wb') as fh:
         fh.write(pdf_bytes)
 
-    return {'archivo': nombre, 'ruta': ruta, 'modo': cfg.modo, 'amenaza_id': cfg.amenaza_id}
+    return {'archivo': nombre, 'ruta': ruta, 'amenaza_id': cfg.amenaza_id}

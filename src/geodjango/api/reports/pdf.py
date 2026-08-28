@@ -1,14 +1,14 @@
 """Orquestador del informe.
 
-Recorre las secciones aplicables al modo pedido y las concatena. Las secciones
-no saben en qué página caen ni qué va antes o después: el salto de página lo
-pone este módulo.
+Recorre las secciones registradas y las concatena. Las secciones no saben en
+qué página caen ni qué va antes o después: el salto de página lo pone este
+módulo.
 """
 
 from reportlab.platypus import PageBreak
 
 from . import charts, doctemplate, sections
-from .config import MODO_EJECUTIVO, ReportConfig
+from .config import ReportConfig
 from .context import ReportContext
 
 
@@ -17,7 +17,7 @@ def generar(cfg):
     try:
         ctx = ReportContext(cfg)
         story = []
-        for sec in sections.secciones_para(cfg, ctx):
+        for sec in sections.secciones_para(cfg):
             bloque = sec.build(ctx, cfg)
             if not bloque:
                 continue
@@ -25,12 +25,10 @@ def generar(cfg):
                 story.append(PageBreak())
             story.extend(bloque)
 
-        modo = 'Versión ejecutiva' if cfg.modo == MODO_EJECUTIVO else 'Versión completa'
         return doctemplate.construir(
             story,
             titulo=f'Riesgo de {ctx.nombre_amenaza} — Valparaíso',
-            subtitulo=f'Sitio Patrimonio Mundial de Valparaíso · {modo}',
-            restringido=cfg.restringido,
+            subtitulo='Sitio Patrimonio Mundial de Valparaíso',
             con_indice=cfg.incluir_indice,
         )
     finally:
@@ -40,6 +38,6 @@ def generar(cfg):
         charts.limpiar_cache()
 
 
-def generar_pdf_resumen(amenaza_id, modo=MODO_EJECUTIVO, **opciones):
+def generar_pdf_resumen(amenaza_id, **opciones):
     """Entrada compatible con la firma anterior."""
-    return generar(ReportConfig(amenaza_id=int(amenaza_id), modo=modo, **opciones))
+    return generar(ReportConfig(amenaza_id=int(amenaza_id), **opciones))
