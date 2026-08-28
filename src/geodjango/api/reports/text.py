@@ -1,8 +1,14 @@
-"""Plantillas de texto narrativo del reporte.
+"""Plantillas de texto narrativo del informe.
 
-La parte cualitativa es fija (plantilla) y los números se inyectan desde los
-conteos calculados en la BD. Los textos definitivos son editables aquí.
-Devuelven cadenas con marcado básico de ReportLab (<b>, <br/>).
+La parte cualitativa es plantilla y los números se inyectan desde los conteos
+calculados en la base. Devuelven cadenas con marcado básico de ReportLab
+(<b>, <br/>).
+
+Regla que este módulo debe respetar: **ninguna afirmación específica de una
+amenaza puede quedar escrita en una plantilla genérica**. Antes las conclusiones
+hablaban de "la gestión del fuego" y de "un plan de gestión de incendios" en
+cualquier informe, de modo que el de Sismo afirmaba cosas falsas. Lo que sea
+propio de una amenaza va en `NOTAS_POR_AMENAZA`, indexado por nombre.
 """
 
 from . import niveles
@@ -13,6 +19,46 @@ def _fila(filas, nivel):
         if f["nivel"] == nivel:
             return f
     return {"cantidad": 0, "porcentaje": 0}
+
+
+def _num(valor, decimales=2):
+    """2.73 -> '2,73'. Sólo sobre el número, nunca sobre la frase entera."""
+    return f"{valor:.{decimales}f}".replace(".", ",")
+
+
+# ── Descriptores de nivel (Tabla 2) ──────────────────────────────────────────
+# Contenido editorial, indexado por nivel. Vive aquí y no en `api/riesgo.py`
+# para que ese módulo, que importa `views.py`, no cargue con prosa del informe.
+
+DESCRIPTORES_NIVEL = {
+    niveles.NIVEL_BAJO:
+        "Los riesgos son aceptables. Se deben implementar medidas para reducir aún más el "
+        "riesgo junto con otras mejoras de seguridad.",
+    niveles.NIVEL_MEDIO:
+        "El riesgo puede ser aceptable a corto plazo. Los planes para reducir y mitigar los "
+        "riesgos deben incluirse en los planes futuros.",
+    niveles.NIVEL_ALTO:
+        "El riesgo es inaceptable. Las medidas para reducir y mitigar el riesgo se deben "
+        "implementar lo antes posible.",
+    niveles.NIVEL_MUY_ALTO:
+        "El riesgo es inaceptable. Se deben tomar medidas inmediatas para mitigar y reducir "
+        "estos riesgos.",
+}
+
+
+# ── Notas específicas por amenaza ────────────────────────────────────────────
+# Observaciones cualitativas del equipo evaluador que sólo aplican a una amenaza.
+# Si una amenaza no está aquí, sus conclusiones se limitan a lo que dicen los
+# números, que es preferible a afirmar algo que no se midió.
+
+NOTAS_POR_AMENAZA = {
+    "Incendio":
+        "De forma generalizada es prácticamente inexistente la gestión del fuego: no existe "
+        "un plan de gestión de incendios, ni inspecciones o actividades de capacitación "
+        "sistemáticas. De forma transversal se observan inmuebles deshabitados, en mal estado "
+        "de conservación o ruinosos y sitios eriazos que actúan como nodos críticos, "
+        "aumentando el riesgo de los inmuebles aledaños.",
+}
 
 
 def intro_resultados_globales(nombres_amenazas):
@@ -26,29 +72,42 @@ def intro_resultados_globales(nombres_amenazas):
     )
 
 
-def parrafo_evaluados(total, no_evaluado):
+def parrafo_evaluados(total, no_evaluado, nombre_amenaza):
     evaluados = total - no_evaluado
     return (
-        f"Se evaluó un total de <b>{evaluados}</b> inmuebles, quedando <b>{no_evaluado}</b> "
-        f"predios sin evaluar por tratarse de espacios públicos o sitios eriazos. "
-        f"Como se explicó en informes anteriores, para la estimación del índice de riesgo se "
-        f"definieron cuatro rangos, detallados en la <b>Tabla 2</b>."
+        f"Para la amenaza {nombre_amenaza.lower()} se evaluó un total de <b>{evaluados}</b> "
+        f"inmuebles, quedando <b>{no_evaluado}</b> predios sin evaluar por tratarse de espacios "
+        f"públicos o sitios eriazos. Para la estimación del índice de riesgo se definieron "
+        f"cuatro rangos, detallados en la <b>Tabla 2</b>."
     )
 
 
 def parrafo_promedios(promedios):
     """`promedios`: lista de {nombre, promedio, nivel} ordenada desc."""
-    partes = []
-    for p in promedios:
-        partes.append(
-            f"'{p['nombre'].lower()}', con un índice promedio "
-            f"{p['nivel'].lower()} de {p['promedio']:.2f}".replace(".", ",")
+    if not promedios:
+        return ""
+
+    if len(promedios) == 1:
+        p = promedios[0]
+        cuerpo = (
+            f"La amenaza evaluada, '{p['nombre'].lower()}', promedia un índice de riesgo "
+            f"{p['nivel'].lower()} de {_num(p['promedio'])}."
         )
-    cuerpo = "; seguido de ".join(partes) if len(partes) > 1 else (partes[0] if partes else "")
+    else:
+        partes = [
+            f"'{p['nombre'].lower()}', con un índice promedio {p['nivel'].lower()} "
+            f"de {_num(p['promedio'])}"
+            for p in promedios
+        ]
+        cuerpo = (
+            "Las amenazas que promedian un índice de riesgo más elevado son, en primer lugar, "
+            + "; seguida de ".join(partes) + "."
+        )
+
     return (
-        "Las amenazas que promedian un índice de riesgo más elevado son, en primer lugar, "
-        f"{cuerpo}. La incidencia de los diferentes aspectos considerados en la evaluación de "
-        "cada amenaza se comenta a continuación, junto con la espacialización de los resultados."
+        cuerpo
+        + " La incidencia de los diferentes aspectos considerados en la evaluación de cada "
+          "amenaza se comenta a continuación, junto con la espacialización de los resultados."
     )
 
 
@@ -63,18 +122,31 @@ def detalle_amenaza_intro(nombre, nombres_indicadores):
 
 
 def parrafo_resultados_amenaza(filas, total):
-    b = _fila(filas, niveles.NIVEL_BAJO)
-    m = _fila(filas, niveles.NIVEL_MEDIO)
-    a = _fila(filas, niveles.NIVEL_ALTO)
-    ma = _fila(filas, niveles.NIVEL_MUY_ALTO)
+    """Describe la distribución en orden de magnitud, no en un orden fijo.
+
+    Antes el orden era literal (alto, medio, muy alto, bajo), así que cuando
+    dominaba el nivel bajo la frase abría igual por el alto y se leía torcido.
+    """
     ne = _fila(filas, niveles.NIVEL_NO_EVALUADO)
+    evaluados = [
+        _fila(filas, n) | {"nivel": n}
+        for n in niveles.NIVELES_RIESGO
+    ]
+    evaluados.sort(key=lambda f: f["cantidad"], reverse=True)
+
+    partes = [
+        f"{f['cantidad']} ({f['porcentaje']}%) {f['nivel'].lower()}"
+        for f in evaluados if f["cantidad"] > 0
+    ]
+    if not partes:
+        return f"De los {total} inmuebles del sitio, ninguno cuenta con evaluación registrada."
+
+    listado = partes[0] if len(partes) == 1 else ", ".join(partes[:-1]) + " y " + partes[-1]
     return (
-        f"De los {total} inmuebles, {a['cantidad']} ({a['porcentaje']}%) presentan un índice de "
-        f"riesgo alto, {m['cantidad']} ({m['porcentaje']}%) medio, {ma['cantidad']} "
-        f"({ma['porcentaje']}%) muy alto y {b['cantidad']} ({b['porcentaje']}%) bajo. "
-        f"Y {ne['cantidad']} inmuebles ({ne['porcentaje']}%) no se evaluaron por corresponder a "
-        f"sitios eriazos o espacios públicos con rol asignado sin edificaciones. "
-        f"Los resultados generales se sintetizan en la <b>Figura 1</b>."
+        f"De los {total} inmuebles del sitio, presentan un índice de riesgo {listado}. "
+        f"Otros {ne['cantidad']} ({ne['porcentaje']}%) no se evaluaron por corresponder a sitios "
+        f"eriazos o espacios públicos con rol asignado sin edificaciones. Los resultados "
+        f"generales se sintetizan en la <b>Figura 1</b>."
     )
 
 
@@ -95,25 +167,36 @@ def parrafo_indicadores_secundarios():
 
 
 def parrafo_subindicador(nombre, promedio, nivel):
-    prom = f"{promedio:.2f}".replace(".", ",")
     return (
         f"El indicador secundario '<b>{nombre.lower()}</b>' presenta un resultado "
-        f"<b>{nivel.lower()}</b> ({prom})."
+        f"<b>{nivel.lower()}</b> ({_num(promedio)})."
     )
 
 
-def conclusiones(filas, total):
-    a = _fila(filas, niveles.NIVEL_ALTO)
-    ma = _fila(filas, niveles.NIVEL_MUY_ALTO)
-    suma = a["porcentaje"] + ma["porcentaje"]
-    return (
-        f"Los resultados dan cuenta de un alto índice de vulnerabilidad frente a la amenaza "
-        f"incendio, con un {a['porcentaje']}% de los inmuebles con un índice alto y un "
-        f"{ma['porcentaje']}% muy alto, que sumados representan el {suma}% del Sitio. "
+def conclusiones(filas, nombre_amenaza):
+    """Conclusiones de la amenaza evaluada.
+
+    El veredicto se deriva de los datos: antes la frase afirmaba "un alto índice
+    de vulnerabilidad" pasara lo que pasara, incluso si dominaba el nivel bajo.
+    """
+    alto = _fila(filas, niveles.NIVEL_ALTO)
+    muy_alto = _fila(filas, niveles.NIVEL_MUY_ALTO)
+    suma = alto["porcentaje"] + muy_alto["porcentaje"]
+
+    if suma >= 50:
+        veredicto = "un alto índice de vulnerabilidad"
+    elif suma >= 25:
+        veredicto = "una vulnerabilidad significativa"
+    else:
+        veredicto = "una vulnerabilidad acotada"
+
+    parrafo = (
+        f"Los resultados dan cuenta de {veredicto} frente a la amenaza "
+        f"{nombre_amenaza.lower()}, con un {alto['porcentaje']}% de los inmuebles en índice alto "
+        f"y un {muy_alto['porcentaje']}% muy alto, que sumados representan el {suma}% del Sitio. "
         f"Existen determinados indicadores que contrastan entre los barrios, cuyo análisis "
-        f"permite focalizar estrategias de mitigación. De forma generalizada es prácticamente "
-        f"inexistente la gestión del fuego: no existe un plan de gestión de incendios, ni "
-        f"inspecciones o actividades de capacitación sistemáticas. De forma transversal se "
-        f"observan inmuebles deshabitados, en mal estado de conservación o ruinosos y sitios "
-        f"eriazos que actúan como nodos críticos, aumentando el riesgo de los inmuebles aledaños."
+        f"permite focalizar estrategias de mitigación."
     )
+
+    nota = NOTAS_POR_AMENAZA.get(nombre_amenaza)
+    return f"{parrafo} {nota}" if nota else parrafo

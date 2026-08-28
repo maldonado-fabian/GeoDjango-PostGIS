@@ -49,6 +49,21 @@ def _gdf_coloreado(base_gdf, df_niveles):
     return merged
 
 
+#: Largo máximo de una etiqueta de clase en la leyenda del mapa. Por encima de
+#: esto el recuadro se come la figura.
+_MAX_ETIQUETA = 34
+
+
+def _etiqueta_clase(etiquetas, subindicador_id, valor):
+    """Nombre de la clase para un puntaje, o el puntaje si no hay clase definida."""
+    nombre = (etiquetas.get(int(subindicador_id)) or {}).get(int(valor))
+    if not nombre:
+        return str(valor)
+    if len(nombre) > _MAX_ETIQUETA:
+        nombre = nombre[:_MAX_ETIQUETA - 1].rstrip() + "…"
+    return f"{valor} · {nombre}"
+
+
 def _cell_color(nivel):
     return colors.HexColor(niveles.color(nivel))
 
@@ -150,20 +165,14 @@ def _tabla1(amenazas_data, total):
 
 
 def _tabla2():
-    """Tabla 2 estática: rangos y descriptores del índice de riesgo."""
+    """Tabla 2: rangos y descriptores del índice de riesgo.
+
+    Los rangos se derivan de los cortes canónicos (`api/riesgo.py`); antes eran
+    literales y cambiar un corte desincronizaba la tabla en silencio.
+    """
     rangos = [
-        ("1 – 1,75", niveles.NIVEL_BAJO,
-         "Los riesgos son aceptables. Se deben implementar medidas para reducir aún más el riesgo "
-         "junto con otras mejoras de seguridad."),
-        ("1,76 – 2,50", niveles.NIVEL_MEDIO,
-         "El riesgo puede ser aceptable a corto plazo. Los planes para reducir y mitigar los "
-         "riesgos deben incluirse en los planes futuros."),
-        ("2,51 – 3,25", niveles.NIVEL_ALTO,
-         "El riesgo es inaceptable. Las medidas para reducir y mitigar el riesgo se deben "
-         "implementar lo antes posible."),
-        ("3,26 – 4,00", niveles.NIVEL_MUY_ALTO,
-         "El riesgo es inaceptable. Se deben tomar medidas inmediatas para mitigar y reducir "
-         "estos riesgos."),
+        (niveles.rango_texto(nivel), nivel, text.DESCRIPTORES_NIVEL[nivel])
+        for nivel in niveles.NIVELES_RIESGO
     ]
     data = [["RANGO", "", "DESCRIPCIÓN"]]
     estilos = [
@@ -217,6 +226,22 @@ def _grid_donas(donut_pngs):
     return t
 
 
+class _Contador:
+    """Numera figuras según el orden real de armado.
+
+    Antes el bucle de sub-indicadores arrancaba en `start=3`, dando por hecho
+    que siempre habría exactamente dos figuras antes: agregar una figura en
+    cualquier punto anterior renumeraba mal todo el resto sin avisar.
+    """
+
+    def __init__(self):
+        self._n = 0
+
+    def siguiente(self):
+        self._n += 1
+        return self._n
+
+
 # ── datos agregados ──────────────────────────────────────────────────────────
 def _conteo_amenaza(amenaza_id, total):
     idx = queries.indice_por_inmueble(amenaza_id)
@@ -239,9 +264,21 @@ def generar_pdf_resumen(amenaza_id):
 
 
 def _generar_pdf_resumen(amenaza_id):
+    amenaza_id = int(amenaza_id)
+
+    # Fallar aquí y no más abajo: antes, un id inexistente producía un informe
+    # con todas las tablas vacías pero titulado "Incendio", que es peor que un
+    # error porque parece un resultado.
+    amenaza_actual = queries.amenaza(amenaza_id)
+    if amenaza_actual is None:
+        raise ValueError(f'No existe la amenaza con id {amenaza_id}')
+    nombre_amenaza = amenaza_actual['nombre']
+
     total = queries.total_inmuebles()
     df_amen = queries.amenazas()
     base_geo = queries.inmuebles_geo()
+    etiquetas = queries.etiquetas_clase(amenaza_id)
+    figura = _Contador()
 
     # --- agregados por amenaza (Tabla 1 + promedios) ---
     amenazas_data, promedios = [], []
@@ -274,9 +311,15 @@ def _generar_pdf_resumen(amenaza_id):
     story.append(Spacer(1, 0.3 * cm))
     story.append(_tabla1(amenazas_data, total))
     story.append(Paragraph("Tabla 1. Resultados globales evaluación de riesgo.", _CAPTION))
-    no_eval = next(f["cantidad"] for f in amenazas_data[0]["filas"]
+    # De la amenaza pedida, no de la primera de la lista: la cobertura puede
+    # diferir entre amenazas y antes el párrafo de un informe de Sismo citaba
+    # los inmuebles evaluados de Incendio.
+    filas_amenaza_actual = next(
+        a["filas"] for a in amenazas_data if a["id"] == amenaza_id
+    )
+    no_eval = next(f["cantidad"] for f in filas_amenaza_actual
                    if f["nivel"] == niveles.NIVEL_NO_EVALUADO)
-    story.append(Paragraph(text.parrafo_evaluados(total, no_eval), _BODY))
+    story.append(Paragraph(text.parrafo_evaluados(total, no_eval, nombre_amenaza), _BODY))
 
     # 3) Tabla 2
     story.append(Spacer(1, 0.3 * cm))
@@ -287,8 +330,6 @@ def _generar_pdf_resumen(amenaza_id):
     story.append(Paragraph(text.parrafo_promedios(promedios), _BODY))
 
     # 5) Detalle de la amenaza objetivo
-    amenaza = df_amen[df_amen["id"] == int(amenaza_id)]
-    nombre_amenaza = amenaza["nombre"].iloc[0] if len(amenaza) else "Incendio"
     df_ind = queries.indicadores(amenaza_id)
 
     story.append(PageBreak())
@@ -302,11 +343,16 @@ def _generar_pdf_resumen(amenaza_id):
     idx_niv = idx.copy()
     idx_niv["nivel"] = idx_niv["indice_de_riesgo"].map(niveles.nivel_por_indice)
     gdf_fig1 = _gdf_coloreado(base_geo, idx_niv[["id_inmueble", "nivel"]])
-    leyenda_riesgo = [(n, niveles.color(n)) for n in niveles.NIVELES_RIESGO]
-    map_png = charts.mapa(gdf_fig1, nombre_amenaza, leyenda_riesgo)
+    # Incluye "No evaluado": el mapa pinta de gris los inmuebles sin evaluación,
+    # y antes la leyenda no explicaba ese gris.
+    leyenda_riesgo = [(n, niveles.color(n)) for n in niveles.NIVELES]
+    map_png = charts.mapa(gdf_fig1, nombre_amenaza, leyenda_riesgo,
+                          etiqueta_leyenda=nombre_amenaza.upper())
     donut_png = charts.donut(filas_am, "RESULTADO GLOBAL Nº; % DE EDIFICIOS")
     story.append(_figura_compuesta(map_png, _tabla_evaluacion(filas_am, total), donut_png))
-    story.append(Paragraph("Figura 1. Resultado global de la amenaza.", _CAPTION))
+    story.append(Paragraph(
+        f"Figura {figura.siguiente()}. Resultado global de la amenaza {nombre_amenaza.lower()}.",
+        _CAPTION))
 
     # 5.3 Indicadores primarios (Figura 2)
     story.append(PageBreak())
@@ -320,16 +366,23 @@ def _generar_pdf_resumen(amenaza_id):
         filas = niveles.conteo(nivs, total)
         donas_ind.append(charts.donut(filas, f"{nombre.upper()} Nº; % DE EDIFICIOS"))
     story.append(_grid_donas(donas_ind))
-    story.append(Paragraph("Figura 2. Resultados de los indicadores primarios.", _CAPTION))
+    story.append(Paragraph(
+        f"Figura {figura.siguiente()}. Resultados de los indicadores primarios.", _CAPTION))
 
     # 5.4 Indicadores secundarios (una figura compuesta por subindicador)
     story.append(PageBreak())
     story.append(Paragraph("Incidencia de los indicadores secundarios en los resultados", _H2))
     story.append(Paragraph(text.parrafo_indicadores_secundarios(), _BODY))
     df_sub = queries.subindicador_valores(amenaza_id)
-    leyenda_escala = [(str(v), niveles.color(niveles.nivel_por_valor_crudo(v))) for v in (1, 2, 3, 4)]
-    for n_fig, (sub_id, g) in enumerate(df_sub.groupby("subindicador_id", sort=True), start=3):
+    for sub_id, g in df_sub.groupby("subindicador_id", sort=True):
         nombre = g["subindicador_nombre"].iloc[0]
+        # Leyenda con el nombre de la clase ("Entramado de madera") en vez del
+        # puntaje desnudo ("4"), que no le dice nada al lector.
+        leyenda_escala = [
+            (_etiqueta_clase(etiquetas, sub_id, v),
+             niveles.color(niveles.nivel_por_valor_crudo(v)))
+            for v in (1, 2, 3, 4)
+        ]
         nivs = [niveles.nivel_por_valor_crudo(v) for v in g["valor"]]
         filas = niveles.conteo(nivs, total)
         promedio = float(g["valor"].mean()) if len(g) else 0.0
@@ -343,15 +396,17 @@ def _generar_pdf_resumen(amenaza_id):
         story.append(PageBreak())
         story.append(Paragraph(f"Indicador secundario: {nombre}", _H2))
         story.append(Paragraph(text.parrafo_subindicador(nombre, promedio, nivel_prom), _BODY))
-        map_png = charts.mapa(gdf_sub, nombre, leyenda_escala)
+        map_png = charts.mapa(gdf_sub, nombre, leyenda_escala,
+                              etiqueta_leyenda=nombre.upper())
         donut_png = charts.donut(filas, f"{nombre.upper()} Nº; % DE EDIFICIOS")
         story.append(_figura_compuesta(map_png, _tabla_evaluacion(filas, total, nombre.upper()), donut_png))
-        story.append(Paragraph(f"Figura {n_fig}. Resultado indicador secundario «{nombre}».", _CAPTION))
+        story.append(Paragraph(
+            f"Figura {figura.siguiente()}. Resultado indicador secundario «{nombre}».", _CAPTION))
 
     # 6) Conclusiones
     story.append(PageBreak())
     story.append(Paragraph("Conclusiones y comentarios", _H1))
-    story.append(Paragraph(text.conclusiones(filas_am, total), _BODY))
+    story.append(Paragraph(text.conclusiones(filas_am, nombre_amenaza), _BODY))
 
     buf = BytesIO()
     doc = SimpleDocTemplate(
