@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS
+.DS_Store
+
+# Django MEDIA_ROOT: salida generada en tiempo de ejecución (reportes PDF de
+# Celery, archivos subidos). No es fuente y llega a decenas de MB.
+src/geodjango/media/
