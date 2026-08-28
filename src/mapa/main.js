@@ -1,4 +1,6 @@
+import 'ol/ol.css';
 import './style.css';
+
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
@@ -9,47 +11,114 @@ import VectorTileSource from 'ol/source/VectorTile';
 import MVT from 'ol/format/MVT';
 import GeoJSON from 'ol/format/GeoJSON';
 import XYZ from 'ol/source/XYZ';
+import { defaults as defaultControls } from 'ol/control';
 import { Style, Fill, Stroke, Circle } from 'ol/style';
 
-// Servers
+// ===== SERVIDORES =====
 const API_BASE = 'http://localhost:8000';
-var vectorServer = 'http://localhost:7800/';
-var featureServer = 'http://localhost:9000/';
+const vectorServer = 'http://localhost:7800/';
+const featureServer = 'http://localhost:9000/';
 
-var vectorUrl = vectorServer + 'public.inmuebles/{z}/{x}/{y}.pbf';
-var incendioUrl = vectorServer + 'public.riesgo_incendio/{z}/{x}/{y}.pbf';
-var geojsonUrl = featureServer + 'collections/public.detalle_calculo_incendio/items?limit=500';
+const incendioUrl = vectorServer + 'public.riesgo_incendio/{z}/{x}/{y}.pbf';
+const geojsonUrl = featureServer + 'collections/public.detalle_calculo_incendio/items?limit=2000';
 
-// ===== GLOBAL STATE =====
-let currentRole = 'viewer';
-let riesgoChart = null;
-let modoVisualizacionActual = {
-  tipo: 'general',
-  id: null,
-  nombre: null,
-  minimo: 0,
-  maximo: 0
+// =============================================================================
+// ESCALA DE RIESGO — fuente única de verdad en el cliente.
+// Debe mantenerse idéntica a api/reports/niveles.py del backend.
+// =============================================================================
+
+const NIVELES = [
+  { key: 'muyalto', label: 'Muy alto', fill: '#ff0000', fg: '#c20000', tint: '#ffe5e5', min: 3.26, rango: '≥ 3,26' },
+  { key: 'alto',    label: 'Alto',     fill: '#ff6600', fg: '#a33f00', tint: '#ffece0', min: 2.51, rango: '2,51 – 3,25' },
+  { key: 'medio',   label: 'Medio',    fill: '#ffff00', fg: '#75690a', tint: '#fbf7cc', min: 1.76, rango: '1,76 – 2,50' },
+  { key: 'bajo',    label: 'Bajo',     fill: '#00aa00', fg: '#00752b', tint: '#e2f5e2', min: -Infinity, rango: '< 1,76' }
+];
+
+// Escala por indicador / sub-indicador (valores ~0–1, no 0–4)
+const NIVELES_PARCIAL = [
+  { key: 'muyalto', label: 'Muy alto', fill: '#ff0000', fg: '#c20000', tint: '#ffe5e5', min: 1.0 },
+  { key: 'alto',    label: 'Alto',     fill: '#ff6600', fg: '#a33f00', tint: '#ffece0', min: 0.5 },
+  { key: 'medio',   label: 'Medio',    fill: '#ffff00', fg: '#75690a', tint: '#fbf7cc', min: 0.25 },
+  { key: 'bajo',    label: 'Bajo',     fill: '#00aa00', fg: '#00752b', tint: '#e2f5e2', min: -Infinity }
+];
+
+const RIESGO_MAX = 4;
+
+/** Nivel para el índice total (escala 0–4). */
+function nivelTotal(valor) {
+  const v = Number(valor) || 0;
+  return NIVELES.find(n => v >= n.min) || NIVELES[NIVELES.length - 1];
+}
+
+/** Nivel para un indicador o sub-indicador (escala ~0–1). */
+function nivelParcial(valor) {
+  const v = Number(valor) || 0;
+  return NIVELES_PARCIAL.find(n => v >= n.min) || NIVELES_PARCIAL[NIVELES_PARCIAL.length - 1];
+}
+
+/** Formato numérico chileno: 2.87 -> "2,87" */
+function num(valor, decimales = 2) {
+  return (Number(valor) || 0).toFixed(decimales).replace('.', ',');
+}
+
+function pct(valor, total) {
+  if (!total) return '0%';
+  return `${Math.round((valor / total) * 100)}%`;
+}
+
+function esc(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+/** Suma de riesgo_indicador de un detalle_riesgo. */
+function riesgoTotalDe(detalle) {
+  const inds = (detalle && detalle.indicadores) || [];
+  return inds.reduce((sum, i) => sum + (parseFloat(i.riesgo_indicador) || 0), 0);
+}
+
+function propsDetalle(feature) {
+  const d = feature.get('detalle_riesgo');
+  if (typeof d === 'string') {
+    try { return JSON.parse(d); } catch { return { indicadores: [] }; }
+  }
+  return d || { indicadores: [] };
+}
+
+// =============================================================================
+// ESTADO
+// =============================================================================
+
+const state = {
+  role: 'viewer',
+  username: '',
+  amenazas: [],
+  amenazaActiva: null,
+  vista: { tipo: 'total', nombre: null },   // 'total' | 'indicador' | 'subindicador'
+  inmuebleSeleccionado: null,
+  distribucion: [],
+  clasesPorSub: {},
+  evaluacionesActuales: {}
 };
 
-// ===== JWT UTILITIES =====
+// =============================================================================
+// JWT / API
+// =============================================================================
+
 function decodeToken(token) {
   try {
     const payload = token.split('.')[1];
     return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function isTokenExpired(token) {
-  const payload = decodeToken(token);
-  if (!payload || !payload.exp) return true;
-  return Date.now() / 1000 > payload.exp;
+  const p = decodeToken(token);
+  return !p || !p.exp || Date.now() / 1000 > p.exp;
 }
 
-function getToken() {
-  return localStorage.getItem('access_token');
-}
+const getToken = () => localStorage.getItem('access_token');
 
 function clearAuth() {
   localStorage.removeItem('access_token');
@@ -69,9 +138,7 @@ async function refreshAccessToken() {
     const data = await res.json();
     localStorage.setItem('access_token', data.access);
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 async function apiFetch(url, options = {}, retry = true) {
@@ -82,155 +149,168 @@ async function apiFetch(url, options = {}, retry = true) {
   const res = await fetch(url, { ...options, headers });
 
   if (res.status === 401 && retry) {
-    const refreshed = await refreshAccessToken();
-    if (refreshed) return apiFetch(url, options, false);
+    if (await refreshAccessToken()) return apiFetch(url, options, false);
     clearAuth();
-    showLoginModal();
+    mostrarLogin('Tu sesión expiró, vuelve a ingresar.');
     throw new Error('Session expired');
   }
   return res;
 }
 
-// ===== COLOR HELPERS =====
-function getColorByValue(valor, tipo = 'general') {
-  if (tipo === 'general') {
-    if (valor >= 3.26) return '#ff0000';
-    if (valor >= 2.51) return '#ff6600';
-    if (valor >= 1.76) return '#ffff00';
-    return '#00aa00';
-  } else {
-    if (valor >= 1.0) return '#ff0000';
-    if (valor >= 0.5) return '#ff6600';
-    if (valor >= 0.25) return '#ffff00';
-    return '#00aa00';
-  }
+// =============================================================================
+// UI: toast
+// =============================================================================
+
+let toastTimer = null;
+function toast(mensaje, tipo = '') {
+  const el = document.getElementById('toast');
+  el.className = 'toast' + (tipo ? ` toast--${tipo}` : '');
+  el.textContent = mensaje;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
 
-function getRiesgoClass(valor, tipo) {
-  if (tipo === 'general') {
-    if (valor >= 3.26) return 'riesgo-altisimo';
-    if (valor >= 2.51) return 'riesgo-alto';
-    if (valor >= 1.76) return 'riesgo-medio';
-    return 'riesgo-bajo';
-  } else {
-    if (valor >= 1.0) return 'riesgo-altisimo';
-    if (valor >= 0.5) return 'riesgo-alto';
-    if (valor >= 0.25) return 'riesgo-medio';
-    return 'riesgo-bajo';
-  }
-}
-
-// ===== MAP LAYERS =====
+// =============================================================================
+// CAPAS DEL MAPA
+// =============================================================================
 
 const baseLayer = new TileLayer({
-  source: new XYZ({
-    url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png'
-  })
+  source: new XYZ({ url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png' })
 });
 
-var incendioLayer = new VectorTileLayer({
-  source: new VectorTileSource({
-    format: new MVT(),
-    url: incendioUrl
-  }),
-  style: function (feature) {
-    const valor = feature.get('riesgo') || 0;
-    const color = getColorByValue(valor, 'general');
-    return new Style({
-      fill: new Fill({ color: color + '99' }),
-      stroke: new Stroke({ color: '#000000bf', width: 1 })
-    });
-  },
+/** Estilo por nivel: relleno con alfa + borde blanco fino (según diseño). */
+function estiloPorValor(valor, escala) {
+  const nivel = escala === 'total' ? nivelTotal(valor) : nivelParcial(valor);
+  return new Style({
+    fill: new Fill({ color: nivel.fill + '99' }),
+    stroke: new Stroke({ color: '#ffffff', width: 1 })
+  });
+}
+
+const incendioLayer = new VectorTileLayer({
+  source: new VectorTileSource({ format: new MVT(), url: incendioUrl }),
+  style: feature => estiloPorValor(feature.get('riesgo') || 0, 'total'),
   visible: true
 });
 
-// GeoJSON source with custom loader (defers load until user is authenticated)
 const geojsonSource = new VectorSource({
   format: new GeoJSON(),
   loader: function (extent, resolution, projection, success, failure) {
-    const self = this;
     fetch(geojsonUrl)
       .then(r => { if (!r.ok) throw new Error('GeoJSON load failed'); return r.json(); })
       .then(data => {
         const features = new GeoJSON().readFeatures(data, { featureProjection: projection });
-        self.addFeatures(features);
+        this.addFeatures(features);
         success(features);
       })
       .catch(() => failure());
   }
 });
 
-var geojsonLayer = new VectorLayer({
-  source: geojsonSource
+/**
+ * Capa invisible pero CLICKEABLE: el color general lo pintan las teselas de
+ * `riesgo_incendio`; esta capa sólo aporta la geometría con la que se detecta
+ * el clic y los atributos del inmueble. Debe llevar un relleno transparente
+ * (no un Style vacío) o OpenLayers no la considera en `forEachFeatureAtPixel`.
+ */
+const estiloClickeable = new Style({ fill: new Fill({ color: 'rgba(0,0,0,0)' }) });
+
+const geojsonLayer = new VectorLayer({
+  source: geojsonSource,
+  style: () => estiloClickeable
 });
 
-var indicadorLayer = new VectorLayer({
+const indicadorLayer = new VectorLayer({
   source: geojsonSource,
   visible: false,
-  style: function () { return new Style({}); }
+  style: () => estiloClickeable
 });
 
-var selectionLayer = new VectorLayer({
+const selectionLayer = new VectorLayer({
   source: new VectorSource(),
-  style: function () {
-    return new Style({
-      fill: new Fill({ color: 'rgba(255, 255, 0, 0.45)' }),
-      stroke: new Stroke({ color: '#ffaa00', width: 4 }),
-      image: new Circle({
-        radius: 8,
-        fill: new Fill({ color: '#ffaa00' }),
-        stroke: new Stroke({ color: '#ffffff', width: 2 })
-      })
-    });
-  }
+  style: () => new Style({
+    // Selección: contorno oscuro sin relleno (no compite con el nivel "medio")
+    stroke: new Stroke({ color: '#16323f', width: 3 }),
+    image: new Circle({
+      radius: 8,
+      fill: new Fill({ color: 'transparent' }),
+      stroke: new Stroke({ color: '#16323f', width: 3 })
+    })
+  })
 });
+
+const VISTA_INICIAL = { center: [-7973693.872453815, -3900580.7807773366], zoom: 17 };
 
 const map = new Map({
   target: 'map',
-  view: new View({
-    center: [-7973693.872453815, -3900580.7807773366],
-    zoom: 17
-  }),
+  controls: defaultControls({ zoom: false, rotate: false, attribution: false }),
+  view: new View({ center: VISTA_INICIAL.center, zoom: VISTA_INICIAL.zoom }),
   layers: [baseLayer, geojsonLayer, incendioLayer, indicadorLayer, selectionLayer]
 });
 
-// ===== AUTH UI =====
+// =============================================================================
+// LAYOUT: paneles acoplados
+// =============================================================================
 
-function showLoginModal() {
-  document.getElementById('login-modal').style.display = 'flex';
-  document.getElementById('user-bar').style.display = 'none';
-  document.getElementById('login-error').style.display = 'none';
-  document.getElementById('login-username').value = '';
+const shell = document.getElementById('app-shell');
+
+function actualizarTamanoMapa() {
+  map.updateSize();
+}
+shell.addEventListener('transitionend', e => {
+  if (e.propertyName === 'grid-template-columns' || e.propertyName === 'transform') actualizarTamanoMapa();
+});
+
+function abrirFicha() {
+  shell.classList.remove('is-right-closed');
+  setTimeout(actualizarTamanoMapa, 280);
+}
+
+function cerrarFicha() {
+  shell.classList.add('is-right-closed');
+  state.inmuebleSeleccionado = null;
+  selectionLayer.getSource().clear();
+  setTimeout(actualizarTamanoMapa, 280);
+}
+
+function togglePanelIzquierdo() {
+  shell.classList.toggle('is-left-closed');
+  setTimeout(actualizarTamanoMapa, 280);
+}
+
+// =============================================================================
+// LOGIN
+// =============================================================================
+
+function mostrarLogin(mensajeError) {
+  document.getElementById('login-modal').hidden = false;
+  shell.hidden = true;
+  const err = document.getElementById('login-error');
+  if (mensajeError) { err.textContent = mensajeError; err.hidden = false; }
+  else { err.hidden = true; }
   document.getElementById('login-password').value = '';
 }
 
-function hideLoginModal() {
-  document.getElementById('login-modal').style.display = 'none';
+function ocultarLogin() {
+  document.getElementById('login-modal').hidden = true;
+  shell.hidden = false;
+  actualizarTamanoMapa();
 }
 
-function updateUserBar(username, role) {
-  const bar = document.getElementById('user-bar');
-  bar.style.display = 'flex';
-  document.getElementById('user-info').innerHTML =
-    `<strong>${username}</strong><span class="role-badge ${role}">${role === 'editor' ? 'Editor' : 'Viewer'}</span>`;
-
-
-  // Offset map so it isn't hidden behind the user bar
-  document.getElementById('map').style.top = '40px';
-  document.getElementById('map').style.height = 'calc(100% - 40px)';
+function iniciales(nombre) {
+  const partes = String(nombre || '').split(/[.\s_-]+/).filter(Boolean);
+  if (!partes.length) return '··';
+  if (partes.length === 1) return partes[0].slice(0, 2);
+  return (partes[0][0] + partes[partes.length - 1][0]);
 }
 
-window.logout = function () {
-  clearAuth();
-  currentRole = 'viewer';
-  cerrarPanel();
-  cerrarPanelClases();
-  showLoginModal();
-  // Clear loaded GeoJSON so it reloads on next login
-  geojsonSource.clear();
-};
-
-// ===== LOGIN HANDLER =====
+function pintarUsuario() {
+  document.getElementById('user-avatar').textContent = iniciales(state.username);
+  document.getElementById('user-chip-name').textContent = state.username || '—';
+  document.getElementById('user-chip-role').textContent = state.role === 'editor' ? 'Editor' : 'Observador';
+  document.getElementById('ponderadores-card').hidden = state.role !== 'editor';
+}
 
 document.getElementById('login-form').addEventListener('submit', async function (e) {
   e.preventDefault();
@@ -240,8 +320,9 @@ document.getElementById('login-form').addEventListener('submit', async function 
   const password = document.getElementById('login-password').value;
 
   btn.disabled = true;
-  btn.textContent = 'Ingresando...';
-  errorDiv.style.display = 'none';
+  const btnHtml = btn.innerHTML;
+  btn.textContent = 'Ingresando…';
+  errorDiv.hidden = true;
 
   try {
     const res = await fetch(`${API_BASE}/api/token/`, {
@@ -255,501 +336,612 @@ document.getElementById('login-form').addEventListener('submit', async function 
       localStorage.setItem('access_token', data.access);
       localStorage.setItem('refresh_token', data.refresh);
       const payload = decodeToken(data.access);
-      currentRole = payload?.role || 'viewer';
-      hideLoginModal();
-      updateUserBar(payload?.username || username, currentRole);
-      // Trigger GeoJSON load now that user is authenticated
-      geojsonSource.refresh();
+      state.role = payload?.role || 'viewer';
+      state.username = payload?.username || username;
+      ocultarLogin();
+      pintarUsuario();
+      await arrancarConsola();
     } else {
       const err = await res.json().catch(() => ({}));
       errorDiv.textContent = err.detail || 'Usuario o contraseña incorrectos.';
-      errorDiv.style.display = 'block';
+      errorDiv.hidden = false;
     }
   } catch {
     errorDiv.textContent = 'No se pudo conectar al servidor.';
-    errorDiv.style.display = 'block';
+    errorDiv.hidden = false;
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Iniciar Sesión';
+    btn.innerHTML = btnHtml;
   }
 });
 
-// ===== APP INIT =====
+document.getElementById('btn-logout').addEventListener('click', () => {
+  clearAuth();
+  state.role = 'viewer';
+  state.username = '';
+  cerrarFicha();
+  cerrarMenus();
+  geojsonSource.clear();
+  mostrarLogin();
+});
 
-function initApp() {
-  const token = getToken();
-  if (token && !isTokenExpired(token)) {
-    const payload = decodeToken(token);
-    currentRole = payload?.role || 'viewer';
-    hideLoginModal();
-    updateUserBar(payload?.username || 'Usuario', currentRole);
-    geojsonSource.refresh();
-  } else {
-    clearAuth();
-    showLoginModal();
-  }
+// =============================================================================
+// AMENAZAS
+// =============================================================================
+
+/**
+ * Sólo la amenaza "incendio" tiene capas de cálculo en PostGIS
+ * (public.riesgo_incendio y public.detalle_calculo_incendio).
+ * Las demás se listan desde la API pero quedan deshabilitadas hasta que
+ * existan sus vistas equivalentes en la base.
+ */
+function amenazaOperativa(amenaza) {
+  return /incendio/i.test(amenaza.nombre || '');
 }
 
-// ===== PANEL TOGGLES =====
-
-window.toggleStatsPanel = function () {
-  const panel = document.getElementById('stats-panel');
-  panel.classList.toggle('visible');
-  if (panel.classList.contains('visible')) cargarIndicadores();
-};
-
-window.toggleChartPanel = function () {
-  const panel = document.getElementById('chart-panel');
-  panel.classList.toggle('visible');
-  if (panel.classList.contains('visible')) {
-    if (modoVisualizacionActual.tipo === 'general') {
-      actualizarEstadisticas();
-    } else if (modoVisualizacionActual.tipo === 'indicador') {
-      const stats = calcularEstadisticasIndicador(modoVisualizacionActual.nombre);
-      actualizarGrafico(stats, `Indicador: ${modoVisualizacionActual.nombre}`);
-      actualizarResumenEstadisticas(stats);
-    } else if (modoVisualizacionActual.tipo === 'subindicador') {
-      const stats = calcularEstadisticasSubindicador(modoVisualizacionActual.nombre);
-      actualizarGrafico(stats, `Subindicador: ${modoVisualizacionActual.nombre}`);
-      actualizarResumenEstadisticas(stats);
-    }
+async function cargarAmenazas() {
+  const cont = document.getElementById('amenaza-selector');
+  try {
+    const res = await apiFetch(`${API_BASE}/api/amenazas/`);
+    if (!res.ok) throw new Error('amenazas');
+    state.amenazas = await res.json();
+  } catch (e) {
+    if (e.message === 'Session expired') return;
+    state.amenazas = [];
   }
-};
 
-window.volverVistaGeneral = function () {
-  modoVisualizacionActual = { tipo: 'general', id: null, nombre: null, minimo: 0, maximo: 0 };
+  if (!state.amenazas.length) { cont.innerHTML = ''; return; }
+
+  const operativa = state.amenazas.find(amenazaOperativa) || state.amenazas[0];
+  state.amenazaActiva = operativa;
+
+  cont.innerHTML = state.amenazas.map(a => {
+    const activa = a.id === state.amenazaActiva.id;
+    const habilitada = amenazaOperativa(a);
+    return `<button type="button" role="tab"
+              class="amenaza-opt${activa ? ' is-active' : ''}"
+              data-amenaza-id="${a.id}"
+              aria-selected="${activa}"
+              ${habilitada ? '' : 'disabled title="Sin capa de cálculo en la base de datos"'}>
+              ${esc(a.nombre)}
+            </button>`;
+  }).join('');
+
+  cont.querySelectorAll('.amenaza-opt:not(:disabled)').forEach(btn => {
+    btn.addEventListener('click', () => seleccionarAmenaza(Number(btn.dataset.amenazaId)));
+  });
+
+  pintarTituloAmenaza();
+}
+
+function seleccionarAmenaza(id) {
+  const amenaza = state.amenazas.find(a => a.id === id);
+  if (!amenaza || amenaza.id === state.amenazaActiva?.id) return;
+  state.amenazaActiva = amenaza;
+  document.querySelectorAll('.amenaza-opt').forEach(b => {
+    const activa = Number(b.dataset.amenazaId) === id;
+    b.classList.toggle('is-active', activa);
+    b.setAttribute('aria-selected', String(activa));
+  });
+  pintarTituloAmenaza();
+  volverVistaGeneral();
+  cerrarFicha();
+}
+
+function pintarTituloAmenaza() {
+  document.getElementById('amenaza-titulo').textContent = state.amenazaActiva?.nombre || '—';
+}
+
+// =============================================================================
+// CONTEXTO TERRITORIAL + LEYENDA
+// =============================================================================
+
+function calcularDistribucion() {
+  const features = geojsonSource.getFeatures();
+  const conteo = { muyalto: 0, alto: 0, medio: 0, bajo: 0 };
+  features.forEach(f => {
+    const nivel = nivelTotal(riesgoTotalDe(propsDetalle(f)));
+    conteo[nivel.key]++;
+  });
+  state.distribucion = NIVELES.map(n => ({ ...n, cantidad: conteo[n.key] }));
+  return state.distribucion;
+}
+
+function pintarLeyenda() {
+  const filas = calcularDistribucion();
+  const total = filas.reduce((s, f) => s + f.cantidad, 0);
+
+  document.getElementById('legend-total').textContent =
+    total === 1 ? '1 inmueble' : `${total} inmuebles`;
+
+  document.getElementById('legend-rows').innerHTML = filas.map(f => `
+    <div class="legend-row">
+      <span class="legend-swatch" style="background:${f.fill}"></span>
+      <span class="legend-label">${f.label}</span>
+      <span class="legend-range">${f.rango}</span>
+      <span class="legend-count">${f.cantidad}</span>
+    </div>
+  `).join('');
+
+  const nInd = contarIndicadores();
+  document.getElementById('legend-foot').textContent = nInd
+    ? `Suma ponderada de ${nInd} ${nInd === 1 ? 'indicador' : 'indicadores'}, escala 0–${RIESGO_MAX}.`
+    : `Escala de riesgo 0–${RIESGO_MAX}.`;
+
+  document.getElementById('contexto-territorial').textContent =
+    `${state.amenazaActiva?.nombre || 'Riesgo'} · ${total} inmuebles catastrados`;
+}
+
+function contarIndicadores() {
+  const f = geojsonSource.getFeatures()[0];
+  if (!f) return 0;
+  return (propsDetalle(f).indicadores || []).length;
+}
+
+// =============================================================================
+// PANEL IZQUIERDO: composición del riesgo
+// =============================================================================
+
+function agregarIndicadores() {
+  const features = geojsonSource.getFeatures();
+  const acc = {};
+
+  features.forEach(f => {
+    (propsDetalle(f).indicadores || []).forEach(ind => {
+      const nombre = ind.indicador_nombre;
+      if (!nombre) return;
+      if (!acc[nombre]) acc[nombre] = { nombre, peso: ind.peso, valores: [], subs: {} };
+      acc[nombre].valores.push(parseFloat(ind.riesgo_indicador) || 0);
+      (ind.sub_indicadores || []).forEach(sub => {
+        const sn = sub.sub_indicador_nombre;
+        if (!sn) return;
+        if (!acc[nombre].subs[sn]) acc[nombre].subs[sn] = { nombre: sn, valores: [] };
+        acc[nombre].subs[sn].valores.push(parseFloat(sub.riesgo_subindicador) || 0);
+      });
+    });
+  });
+
+  const prom = arr => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+  const lista = Object.values(acc).map(d => ({
+    nombre: d.nombre,
+    peso: d.peso,
+    promedio: prom(d.valores),
+    subs: Object.values(d.subs).map(s => ({ nombre: s.nombre, promedio: prom(s.valores) }))
+  }));
+
+  const sumaProm = lista.reduce((s, i) => s + i.promedio, 0);
+  lista.forEach(i => { i.aporte = sumaProm ? (i.promedio / sumaProm) * 100 : 0; });
+  return lista;
+}
+
+function renderizarIndicadores() {
+  const cont = document.getElementById('indicadores-container');
+  const lista = agregarIndicadores();
+
+  if (!lista.length) {
+    cont.innerHTML = '<p class="panel-placeholder">No hay indicadores disponibles.</p>';
+    return;
+  }
+
+  const maxProm = Math.max(...lista.map(i => i.promedio), 0.0001);
+
+  cont.innerHTML = lista.map(ind => {
+    const nivel = nivelParcial(ind.promedio);
+    const ancho = Math.min(100, (ind.promedio / maxProm) * 100);
+    const pesoTxt = ind.peso != null ? `peso ${Math.round((ind.peso || 0) * 100)}%` : '';
+    const nSubs = ind.subs.length;
+
+    const subsHtml = nSubs
+      ? ind.subs.map(s => {
+          const sn = nivelParcial(s.promedio);
+          return `<div class="subindicador-item" data-subindicador="${esc(s.nombre)}">
+                    <span class="subindicador-nombre">${esc(s.nombre)}</span>
+                    <span class="subindicador-riesgo" style="color:${sn.fg}">${num(s.promedio)}</span>
+                  </div>`;
+        }).join('')
+      : '<p class="panel-placeholder">Sin sub-indicadores.</p>';
+
+    return `
+      <div class="indicador-item">
+        <div class="indicador-header" data-indicador="${esc(ind.nombre)}">
+          <div class="indicador-top">
+            <span class="indicador-nombre">${esc(ind.nombre)}</span>
+            ${pesoTxt ? `<span class="indicador-peso">${pesoTxt}</span>` : ''}
+            <span class="indicador-riesgo" style="background:${nivel.tint};color:${nivel.fg}">${num(ind.promedio)}</span>
+            <span class="indicador-toggle">▼</span>
+          </div>
+          <div class="bar-track"><div class="bar-fill" style="width:${ancho}%;background:${nivel.fill}"></div></div>
+          <div class="indicador-foot">
+            <span>${nSubs} ${nSubs === 1 ? 'sub-indicador' : 'sub-indicadores'}</span>
+            <span>${Math.round(ind.aporte)}% del total</span>
+          </div>
+        </div>
+        <div class="subindicadores-container">${subsHtml}</div>
+      </div>
+    `;
+  }).join('');
+
+  cont.querySelectorAll('.indicador-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const subCont = header.nextElementSibling;
+      const toggle = header.querySelector('.indicador-toggle');
+      subCont.classList.toggle('visible');
+      toggle.textContent = subCont.classList.contains('visible') ? '▲' : '▼';
+      seleccionarIndicador(header.dataset.indicador);
+    });
+  });
+
+  cont.querySelectorAll('.subindicador-item').forEach(item => {
+    item.addEventListener('click', e => {
+      e.stopPropagation();
+      seleccionarSubindicador(item.dataset.subindicador);
+    });
+  });
+}
+
+// ---- Segmentado Riesgo total / Por indicador ----
+document.querySelectorAll('.segmented-opt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.vista === 'total') { volverVistaGeneral(); return; }
+    // "Por indicador": si aún no hay uno elegido, entra al primero de la lista
+    if (state.vista.tipo === 'total') {
+      const primero = document.querySelector('.indicador-header');
+      if (primero) {
+        primero.nextElementSibling.classList.add('visible');
+        primero.querySelector('.indicador-toggle').textContent = '▲';
+        seleccionarIndicador(primero.dataset.indicador);
+      }
+    }
+  });
+});
+
+function pintarSegmentado() {
+  const esTotal = state.vista.tipo === 'total';
+  document.querySelectorAll('.segmented-opt').forEach(b => {
+    const activa = (b.dataset.vista === 'total') === esTotal;
+    b.classList.toggle('is-active', activa);
+    b.setAttribute('aria-selected', String(activa));
+  });
+}
+
+function volverVistaGeneral() {
+  state.vista = { tipo: 'total', nombre: null };
   incendioLayer.setVisible(true);
   indicadorLayer.setVisible(false);
   document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
-  document.getElementById('btnVistaGeneral').style.display = 'none';
-  if (document.getElementById('chart-panel').classList.contains('visible')) actualizarEstadisticas();
-};
-
-// ===== INDICATORS PANEL =====
-
-function cargarIndicadores() {
-  const container = document.getElementById('indicadores-container');
-  if (!container) return;
-  const features = geojsonLayer.getSource().getFeatures();
-  if (features.length === 0) {
-    container.innerHTML = '<p style="text-align:center;color:#666;">No hay datos disponibles</p>';
-    return;
-  }
-  const indicadoresObj = {};
-  features.forEach(feature => {
-    const props = feature.getProperties();
-    const detalle = props.detalle_riesgo || { indicadores: [] };
-    if (!detalle.indicadores || !Array.isArray(detalle.indicadores)) return;
-    detalle.indicadores.forEach(indicador => {
-      const nombre = indicador.indicador_nombre;
-      if (!nombre) return;
-      if (!indicadoresObj[nombre]) indicadoresObj[nombre] = { nombre, valores: [], subindicadores: {} };
-      indicadoresObj[nombre].valores.push(parseFloat(indicador.riesgo_indicador) || 0);
-      if (indicador.sub_indicadores && Array.isArray(indicador.sub_indicadores)) {
-        indicador.sub_indicadores.forEach(sub => {
-          const subNombre = sub.sub_indicador_nombre;
-          if (!subNombre) return;
-          if (!indicadoresObj[nombre].subindicadores[subNombre])
-            indicadoresObj[nombre].subindicadores[subNombre] = { nombre: subNombre, valores: [] };
-          indicadoresObj[nombre].subindicadores[subNombre].valores.push(parseFloat(sub.riesgo_subindicador) || 0);
-        });
-      }
-    });
-  });
-  renderizarIndicadores(container, indicadoresObj);
+  pintarSegmentado();
 }
 
-function renderizarIndicadores(container, indicadoresObj) {
-  if (Object.keys(indicadoresObj).length === 0) {
-    container.innerHTML = '<p style="text-align:center;color:#666;">No se encontraron indicadores</p>';
-    return;
-  }
-  let html = '';
-  Object.values(indicadoresObj).forEach(data => {
-    const indicadorId = data.nombre.replace(/[^a-zA-Z0-9]/g, '-');
-    html += `
-      <div class="indicador-item">
-        <div class="indicador-header" onclick="toggleIndicador(event, this)" data-indicador="${data.nombre}">
-          <span class="indicador-nombre">${data.nombre}</span>
-          <span><span class="indicador-riesgo"></span><span class="indicador-toggle">▼</span></span>
-        </div>
-        <div class="subindicadores-container" id="sub-${indicadorId}">
-    `;
-    const subindicadoresArray = Object.values(data.subindicadores);
-    if (subindicadoresArray.length > 0) {
-      subindicadoresArray.forEach(subData => {
-        const subPromedio = subData.valores.length > 0
-          ? subData.valores.reduce((a, b) => a + b, 0) / subData.valores.length : 0;
-        html += `
-          <div class="subindicador-item"
-               onclick="seleccionarSubindicador(event, '${subData.nombre}', ${subPromedio})"
-               data-subindicador="${subData.nombre}">
-            <span class="subindicador-nombre">${subData.nombre}</span>
-            <span class="subindicador-riesgo"></span>
-          </div>`;
-      });
-    } else {
-      html += `<div style="padding:10px;color:#999;text-align:center;">Sin subindicadores</div>`;
-    }
-    html += `</div></div>`;
-  });
-  container.innerHTML = html;
-}
-
-window.toggleIndicador = function (event, header) {
-  event.stopPropagation();
-  const container = header.nextElementSibling;
-  const toggle = header.querySelector('.indicador-toggle');
-  container.classList.toggle('visible');
-  toggle.textContent = container.classList.contains('visible') ? '▲' : '▼';
-  seleccionarIndicador(event, header.dataset.indicador);
-};
-
-function calcularEstadisticasIndicador(nombreIndicador) {
-  const features = geojsonLayer.getSource().getFeatures();
-  const stats = { altisimo: 0, alto: 0, medio: 0, bajo: 0 };
-  features.forEach(feature => {
-    const props = feature.getProperties();
-    const detalle = props.detalle_riesgo || { indicadores: [] };
-    const indicador = detalle.indicadores?.find(ind => ind.indicador_nombre === nombreIndicador);
-    if (indicador) {
-      const valor = parseFloat(indicador.riesgo_indicador) || 0;
-      if (valor >= 1.0) stats.altisimo++;
-      else if (valor >= 0.5) stats.alto++;
-      else if (valor >= 0.25) stats.medio++;
-      else stats.bajo++;
-    }
-  });
-  return stats;
-}
-
-function calcularEstadisticasSubindicador(nombreSubindicador) {
-  const features = geojsonLayer.getSource().getFeatures();
-  const stats = { altisimo: 0, alto: 0, medio: 0, bajo: 0 };
-  features.forEach(feature => {
-    const props = feature.getProperties();
-    const detalle = props.detalle_riesgo || { indicadores: [] };
-    for (const ind of detalle.indicadores || []) {
-      const sub = ind.sub_indicadores?.find(s => s.sub_indicador_nombre === nombreSubindicador);
-      if (sub) {
-        const valor = parseFloat(sub.riesgo_subindicador) || 0;
-        if (valor >= 1.0) stats.altisimo++;
-        else if (valor >= 0.5) stats.alto++;
-        else if (valor >= 0.25) stats.medio++;
-        else stats.bajo++;
-        break;
-      }
-    }
-  });
-  return stats;
-}
-
-window.seleccionarIndicador = function (event, nombreIndicador) {
-  if (event) event.stopPropagation();
-  modoVisualizacionActual = { tipo: 'indicador', id: nombreIndicador, nombre: nombreIndicador };
+function seleccionarIndicador(nombre) {
+  state.vista = { tipo: 'indicador', nombre };
   incendioLayer.setVisible(false);
   indicadorLayer.setVisible(true);
-  indicadorLayer.setStyle(function (feature) {
-    const props = feature.getProperties();
-    const detalle = props.detalle_riesgo || { indicadores: [] };
-    const indicador = detalle.indicadores?.find(ind => ind.indicador_nombre === nombreIndicador);
-    const valor = indicador?.riesgo_indicador || 0;
-    const color = getColorByValue(valor, 'indicador');
-    return new Style({
-      fill: new Fill({ color: color + '99' }),
-      stroke: new Stroke({ color: '#000000bf', width: 1 })
-    });
+  indicadorLayer.setStyle(feature => {
+    const ind = (propsDetalle(feature).indicadores || []).find(i => i.indicador_nombre === nombre);
+    return estiloPorValor(ind?.riesgo_indicador || 0, 'parcial');
   });
-  document.querySelectorAll('.indicador-header').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.subindicador-item').forEach(el => el.classList.remove('active'));
-  for (let header of document.querySelectorAll('.indicador-header')) {
-    if (header.dataset.indicador === nombreIndicador) { header.classList.add('active'); break; }
-  }
-  document.getElementById('btnVistaGeneral').style.display = 'block';
-  if (document.getElementById('chart-panel').classList.contains('visible')) {
-    const stats = calcularEstadisticasIndicador(nombreIndicador);
-    actualizarGrafico(stats, `Indicador: ${nombreIndicador}`);
-    actualizarResumenEstadisticas(stats);
-  }
+
+  document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
+  const header = document.querySelector(`.indicador-header[data-indicador="${CSS.escape(nombre)}"]`);
+  if (header) header.classList.add('active');
+
+  pintarSegmentado();
   indicadorLayer.changed();
-};
+}
 
-window.seleccionarSubindicador = function (event, nombreSubindicador, promedio) {
-  if (event) event.stopPropagation();
-  modoVisualizacionActual = { tipo: 'subindicador', id: nombreSubindicador, nombre: nombreSubindicador };
+function seleccionarSubindicador(nombre) {
+  state.vista = { tipo: 'subindicador', nombre };
   incendioLayer.setVisible(false);
   indicadorLayer.setVisible(true);
-  indicadorLayer.setStyle(function (feature) {
-    const props = feature.getProperties();
-    const detalle = props.detalle_riesgo || { indicadores: [] };
+  indicadorLayer.setStyle(feature => {
     let valor = 0;
-    for (const ind of detalle.indicadores || []) {
-      const sub = ind.sub_indicadores?.find(s => s.sub_indicador_nombre === nombreSubindicador);
+    for (const ind of propsDetalle(feature).indicadores || []) {
+      const sub = (ind.sub_indicadores || []).find(s => s.sub_indicador_nombre === nombre);
       if (sub) { valor = sub.riesgo_subindicador || 0; break; }
     }
-    const color = getColorByValue(valor, 'subindicador');
-    return new Style({
-      fill: new Fill({ color: color + '99' }),
-      stroke: new Stroke({ color: '#000000bf', width: 1 })
-    });
+    return estiloPorValor(valor, 'parcial');
   });
-  document.querySelectorAll('.indicador-header').forEach(el => el.classList.remove('active'));
-  document.querySelectorAll('.subindicador-item').forEach(el => el.classList.remove('active'));
-  event.currentTarget.classList.add('active');
-  document.getElementById('btnVistaGeneral').style.display = 'block';
-  if (document.getElementById('chart-panel').classList.contains('visible')) {
-    const stats = calcularEstadisticasSubindicador(nombreSubindicador);
-    actualizarGrafico(stats, `Subindicador: ${nombreSubindicador}`);
-    actualizarResumenEstadisticas(stats);
-  }
+
+  document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
+  const item = document.querySelector(`.subindicador-item[data-subindicador="${CSS.escape(nombre)}"]`);
+  if (item) item.classList.add('active');
+
+  pintarSegmentado();
   indicadorLayer.changed();
-  console.log(`Mostrando subindicador: ${nombreSubindicador} (promedio: ${promedio.toFixed(2)})`);
-};
-
-// ===== CHART =====
-
-function calcularEstadisticasRiesgo() {
-  const features = geojsonLayer.getSource().getFeatures();
-  const stats = { altisimo: 0, alto: 0, medio: 0, bajo: 0 };
-  features.forEach(feature => {
-    const props = feature.getProperties();
-    const indicadores = (props.detalle_riesgo || {}).indicadores || [];
-    const riesgoTotal = indicadores.reduce((sum, ind) => sum + (parseFloat(ind.riesgo_indicador) || 0), 0);
-    if (riesgoTotal >= 3.26) stats.altisimo++;
-    else if (riesgoTotal >= 2.51) stats.alto++;
-    else if (riesgoTotal >= 1.76) stats.medio++;
-    else stats.bajo++;
-  });
-  return stats;
 }
 
-function actualizarResumenEstadisticas(stats) {
-  const summaryDiv = document.getElementById('stats-summary');
-  if (!summaryDiv) return;
-  const total = Object.values(stats).reduce((a, b) => a + b, 0);
-  const categorias = [
-    { key: 'altisimo', label: 'Muy Alto', color: '#ff0000' },
-    { key: 'alto', label: 'Alto', color: '#ff6600' },
-    { key: 'medio', label: 'Medio', color: '#ffff00' },
-    { key: 'bajo', label: 'Bajo', color: '#00aa00' }
+// =============================================================================
+// FICHA DEL INMUEBLE
+// =============================================================================
+
+function segmentosEscala() {
+  // Anchos proporcionales a los cortes 1,76 / 2,51 / 3,26 / 4,00 sobre la escala 0–4
+  return [
+    { fill: '#00aa00', w: 44 },
+    { fill: '#ffff00', w: 19 },
+    { fill: '#ff6600', w: 18 },
+    { fill: '#ff0000', w: 19 }
   ];
-  summaryDiv.innerHTML = categorias.map(cat => {
-    const valor = stats[cat.key];
-    const porcentaje = total > 0 ? ((valor / total) * 100).toFixed(1) : 0;
-    return `<div class="stat-card ${cat.key}">
-      <div class="stat-label">${cat.label}</div>
-      <div class="stat-value">${valor}</div>
-      <div class="stat-percentage">${porcentaje}%</div>
-    </div>`;
-  }).join('');
 }
 
-function actualizarGrafico(stats, titulo = 'Distribución de Riesgo General') {
-  const canvas = document.getElementById('riesgoChart');
-  if (!canvas) return;
-  const total = Object.values(stats).reduce((a, b) => a + b, 0);
-  if (riesgoChart) riesgoChart.destroy();
-  const chartTitle = document.getElementById('chart-title');
-  if (chartTitle) chartTitle.textContent = titulo;
-  riesgoChart = new Chart(canvas, {
-    type: 'doughnut',
-    data: {
-      labels: [
-        `Muy Alto (${stats.altisimo})`, `Alto (${stats.alto})`,
-        `Medio (${stats.medio})`, `Bajo (${stats.bajo})`
-      ],
-      datasets: [{
-        data: [stats.altisimo, stats.alto, stats.medio, stats.bajo],
-        backgroundColor: ['#ff0000', '#ff6600', '#ffff00', '#00aa00'],
-        borderColor: 'rgba(255,255,255,0.9)',
-        borderWidth: 2
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      cutout: '60%',
-      plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 10, family: "'Space Mono', monospace" }, color: '#64748b' } },
-        tooltip: {
-          callbacks: {
-            label: function (context) {
-              const value = context.raw || 0;
-              const percentage = ((value / total) * 100).toFixed(1);
-              return `${context.label}: ${value} (${percentage}%)`;
-            }
-          }
-        }
-      }
-    }
-  });
-}
-
-function actualizarEstadisticas() {
-  actualizarGrafico(calcularEstadisticasRiesgo(), 'Distribución de Riesgo General');
-  actualizarResumenEstadisticas(calcularEstadisticasRiesgo());
-}
-
-// ===== INFO PANEL =====
-
-window.cerrarPanel = function () {
-  document.getElementById('info-panel').style.display = 'none';
-  selectionLayer.getSource().clear();
-};
-
-window.toggleSection = function (header) {
-  header.classList.toggle('collapsed');
-  const content = header.nextElementSibling;
-  if (content) content.classList.toggle('collapsed');
-};
-
-function mostrarPanelInmueble(coordenada, feature) {
-  var props = feature.getProperties();
-  var panel = document.getElementById('info-panel');
-  var content = document.getElementById('panel-content');
-  if (!panel || !content) return;
-
-  selectionLayer.getSource().clear();
-  var clonedFeature = feature.clone();
-  selectionLayer.getSource().addFeature(clonedFeature);
-
-  var detalleRiesgo = props.detalle_riesgo || { indicadores: [] };
-  var indicadores = detalleRiesgo.indicadores || [];
-  var riesgoTotal = indicadores.reduce((sum, ind) => sum + (parseFloat(ind.riesgo_indicador) || 0), 0);
-
-  var riesgoClass = 'bajo';
-  if (riesgoTotal >= 3.26) riesgoClass = 'altisimo';
-  else if (riesgoTotal >= 2.51) riesgoClass = 'alto';
-  else if (riesgoTotal >= 1.76) riesgoClass = 'medio';
-
+function mostrarFichaInmueble(feature) {
+  const props = feature.getProperties();
+  const detalle = propsDetalle(feature);
+  const indicadores = detalle.indicadores || [];
+  const total = riesgoTotalDe(detalle);
+  const nivel = nivelTotal(total);
   const inmuebleId = props.id;
 
-  var html = `
-    <div class="datos-generales">
-      <h4>Detalles del Inmueble</h4>
-      <p><strong>Dirección:</strong> ${props.direccion || 'N/A'}</p>
-      <p><strong>Rol SII:</strong> ${props.rol_sii || 'N/A'}</p>
-      <p><strong>Manzana:</strong> ${props.manzana || 'N/A'}</p>
-      <p><strong>Predio:</strong> ${props.predio || 'N/A'}</p>
-      <p><strong>Riesgo Total:</strong> <span class="riesgo-badge ${riesgoClass}">${riesgoTotal.toFixed(2)}</span></p>
+  state.inmuebleSeleccionado = { id: inmuebleId, props, detalle };
+
+  // Resalte en el mapa
+  selectionLayer.getSource().clear();
+  selectionLayer.getSource().addFeature(feature.clone());
+
+  // --- Cabecera ---
+  document.getElementById('panel-title').textContent = props.direccion || 'Inmueble sin dirección';
+
+  const metas = [];
+  if (props.rol_sii) metas.push(`Rol SII ${props.rol_sii}`);
+  if (props.manzana) metas.push(`Manzana ${props.manzana}`);
+  if (props.predio) metas.push(`Predio ${props.predio}`);
+  if (props.region) metas.push(esc(props.region));
+  document.getElementById('ficha-meta').innerHTML =
+    metas.map(m => `<span class="meta-chip">${esc(m)}</span>`).join('');
+
+  // --- Cuerpo ---
+  const marcador = Math.max(0, Math.min(100, (total / RIESGO_MAX) * 100));
+  const segs = segmentosEscala().map(s => `<div class="scale-seg" style="width:${s.w}%;background:${s.fill}"></div>`).join('');
+
+  // Aporte de cada sub-indicador sobre el total ponderado
+  const filas = [];
+  indicadores.forEach(ind => {
+    (ind.sub_indicadores || []).forEach(sub => {
+      filas.push({
+        nombre: sub.sub_indicador_nombre || '—',
+        clase: sub.clase,
+        valor: parseFloat(sub.riesgo_subindicador) || 0,
+        ponderado: parseFloat(sub.riesgo_subindicador_ponderado) || 0
+      });
+    });
+  });
+  const sumaPond = filas.reduce((s, f) => s + f.ponderado, 0);
+  const maxValor = Math.max(...filas.map(f => f.valor), 0.0001);
+
+  const filasHtml = filas.length ? filas.map(f => {
+    const n = nivelParcial(f.valor);
+    const ancho = Math.min(100, (f.valor / maxValor) * 100);
+    const aporte = sumaPond ? `${num((f.ponderado / sumaPond) * 100, 1)}%` : '—';
+    const claseTxt = f.clase || 'Sin clase';
+    const editable = state.role === 'editor';
+    return `
+      <div class="sub-card" data-subnombre="${esc(f.nombre)}">
+        <div class="sub-row">
+          <span class="sub-name">${esc(f.nombre)}</span>
+          <span class="sub-value" style="color:${n.fg}">${num(f.valor)}</span>
+          ${editable ? `<button class="icon-btn btn-editar-sub" style="width:26px;height:26px;background:var(--bg-inset)" title="Editar clase" aria-label="Editar clase de ${esc(f.nombre)}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>
+          </button>` : ''}
+        </div>
+        <div class="sub-row">
+          <span class="clase-chip" style="background:${n.tint};color:${n.fg}" title="${esc(claseTxt)}">${esc(claseTxt)}</span>
+          <div class="sub-bar"><div class="bar-fill" style="width:${ancho}%;background:${n.fill}"></div></div>
+          <span class="sub-aporte">${aporte}</span>
+        </div>
+      </div>`;
+  }).join('') : '<p class="panel-placeholder">Este inmueble no tiene evaluaciones registradas.</p>';
+
+  document.getElementById('panel-content').innerHTML = `
+    <div class="score-card">
+      <div class="score-top">
+        <div class="score-value">${num(total)}</div>
+        <div class="score-side">
+          <div class="score-level" style="color:${nivel.fg}">Riesgo ${nivel.label.toLowerCase()}</div>
+          <div class="score-range">rango ${nivel.rango} · de ${num(RIESGO_MAX)}</div>
+        </div>
+      </div>
+      <div class="scale">
+        <div class="scale-bar">${segs}</div>
+        <div class="scale-marker" style="left:${marcador}%"></div>
+        <div class="scale-ticks">
+          <span>0,00</span><span>1,76</span><span>2,51</span><span>3,26</span><span>4,00</span>
+        </div>
+      </div>
     </div>
+
+    <div class="explica">
+      <div class="kicker">Qué explica este puntaje</div>
+      <div class="explica-list">${filasHtml}</div>
+    </div>
+
+    <div id="edit-form-container-${inmuebleId}"></div>
   `;
 
-  // Editor-only: edit property metadata button
-  if (currentRole === 'editor' && inmuebleId) {
-    html += `
-      <button class="btn-edit-inmueble" onclick="mostrarFormEdicion(${inmuebleId}, ${JSON.stringify({
-        direccion: props.direccion || '',
-        region: props.region || '',
-        manzana: props.manzana || '',
-        predio: props.predio || ''
-      }).replace(/"/g, '&quot;')})">
-        ✏️ Editar Datos del Inmueble
-      </button>
-      <div id="edit-form-container-${inmuebleId}"></div>
-    `;
+  document.getElementById('ficha-foot').hidden = state.role !== 'editor';
+
+  if (state.role === 'editor' && inmuebleId) {
+    cargarEvaluacionesEnFicha(inmuebleId);
   }
 
-  if (indicadores.length === 0) {
-    html += '<p style="text-align:center;color:#666;">No hay indicadores disponibles</p>';
-  } else {
-    // For editors: each sub-indicator row gets a data-subind attribute for later injection
-    const isEditor = currentRole === 'editor' && inmuebleId;
-    const extraHeader = isEditor ? '<th>Editar Valor</th>' : '';
+  abrirFicha();
+}
 
-    indicadores.forEach((indicador, idx) => {
-      var riesgoInd = parseFloat(indicador.riesgo_indicador) || 0;
-      var indClass = riesgoInd >= 2.0 ? 'alto' : (riesgoInd >= 1.0 ? 'medio' : 'bajo');
-      html += `
-        <div class="collapsible-section">
-          <div class="section-header" onclick="toggleSection(this)">
-            <span>${indicador.indicador_nombre || 'Indicador ' + (idx + 1)}</span>
-            <span>
-              <span class="riesgo-badge ${indClass}" style="margin-right:10px;">${riesgoInd.toFixed(2)}</span>
-              <span class="toggle-icon">▼</span>
-            </span>
-          </div>
-          <div class="section-content">
-            <p><strong>Peso:</strong> ${((indicador.peso || 0) * 100).toFixed(0)}%</p>
-            <table class="info-table">
-              <thead><tr><th>Sub-indicador</th><th>Clase</th><th>Riesgo</th>${extraHeader}</tr></thead>
-              <tbody>
-      `;
-      (indicador.sub_indicadores || []).forEach(sub => {
-        var riesgoSub = parseFloat(sub.riesgo_subindicador) || 0;
-        var riesgoPond = parseFloat(sub.riesgo_subindicador_ponderado) || 0;
-        var subClass = riesgoSub >= 2.0 ? 'alto' : (riesgoSub >= 1.0 ? 'medio' : 'bajo');
-        const subNombre = sub.sub_indicador_nombre || 'N/A';
-        const editCell = isEditor
-          ? `<td class="eval-edit-cell" data-subind="${subNombre}"><span class="eval-val-loading" style="color:#aaa;font-size:11px;">cargando…</span></td>`
-          : '';
-        html += `
-          <tr class="riesgo-${subClass}">
-            <td>${subNombre}</td>
-            <td>${sub.clase || 'N/A'}</td>
-            <td>${riesgoSub.toFixed(2)} <small style="color:#666;">(${(riesgoPond * 100).toFixed(1)}%)</small></td>
-            ${editCell}
-          </tr>
-        `;
-      });
-      html += `</tbody></table></div></div>`;
+// =============================================================================
+// EDITOR: cambio de clase por sub-indicador
+// =============================================================================
+
+async function cargarEvaluacionesEnFicha(inmuebleId) {
+  try {
+    const [evRes, clasesRes] = await Promise.all([
+      apiFetch(`${API_BASE}/api/evaluacion/inmueble/${inmuebleId}/`),
+      apiFetch(`${API_BASE}/api/clases/`)
+    ]);
+    if (!evRes.ok || !clasesRes.ok) throw new Error('Error cargando evaluaciones');
+
+    const evaluaciones = await evRes.json();
+    const todasClases = await clasesRes.json();
+
+    state.evaluacionesActuales = {};
+    evaluaciones.forEach(e => {
+      state.evaluacionesActuales[e.sub_indicador_nombre] = {
+        id: e.id, valor: e.valor, subId: e.id_subindicador
+      };
     });
-  }
 
-  content.innerHTML = html;
-  panel.style.display = 'flex';
-  document.getElementById('panel-title').innerHTML =
-    props.direccion ? `Inmueble: ${props.direccion}` : 'Detalles del Inmueble';
+    state.clasesPorSub = {};
+    todasClases.forEach(c => {
+      (state.clasesPorSub[c.sub_indicador] ||= []).push({ nombre: c.nombre, valor: c.valor });
+    });
+    Object.values(state.clasesPorSub).forEach(arr => arr.sort((a, b) => a.valor - b.valor));
 
-  // Load evaluaciones async and inject edit inputs for editors
-  if (currentRole === 'editor' && inmuebleId) {
-    cargarEvaluacionesEnPanel(inmuebleId);
+    document.querySelectorAll('.btn-editar-sub').forEach(btn => {
+      btn.addEventListener('click', () => abrirEdicionSub(btn.closest('.sub-card')));
+    });
+  } catch (e) {
+    if (e.message !== 'Session expired') toast('No se pudieron cargar las clases editables.', 'error');
   }
 }
 
-// ===== EDITOR: INMUEBLE FORM =====
+function abrirEdicionSub(card) {
+  if (!card || card.querySelector('.eval-clase-select')) return;
 
-window.mostrarFormEdicion = function (id, props) {
-  const container = document.getElementById(`edit-form-container-${id}`);
-  if (!container) return;
+  const nombre = card.dataset.subnombre;
+  const ev = state.evaluacionesActuales[nombre];
+  if (!ev) { toast('Este sub-indicador no tiene evaluación registrada.', 'error'); return; }
 
-  // Toggle: if form is already open, close it
-  if (container.innerHTML.trim() !== '') {
-    container.innerHTML = '';
-    return;
+  const clases = state.clasesPorSub[ev.subId] || [];
+  if (!clases.length) { toast('Este sub-indicador no tiene clases definidas.', 'error'); return; }
+
+  const chip = card.querySelector('.clase-chip');
+  const options = clases.map(c =>
+    `<option value="${c.valor}"${c.valor === ev.valor ? ' selected' : ''}>${esc(c.nombre)}</option>`
+  ).join('');
+
+  const select = document.createElement('select');
+  select.className = 'eval-clase-select';
+  select.innerHTML = options;
+  select.setAttribute('aria-label', `Clase de ${nombre}`);
+
+  const msg = document.createElement('span');
+  msg.className = 'eval-msg';
+
+  chip.replaceWith(select);
+  select.after(msg);
+  select.focus();
+
+  select.addEventListener('change', () => guardarEvaluacion(card, ev.id, select, msg));
+}
+
+async function guardarEvaluacion(card, evaluacionId, select, msg) {
+  const valor = parseInt(select.value, 10);
+  if (isNaN(valor)) return;
+
+  select.disabled = true;
+  card.classList.add('is-saving');
+  card.classList.remove('is-error');
+  msg.className = 'eval-msg eval-msg--wait';
+  msg.textContent = '…';
+
+  try {
+    const res = await apiFetch(`${API_BASE}/api/evaluacion/actualizar/${evaluacionId}/`, {
+      method: 'PATCH',
+      body: JSON.stringify({ valor })
+    });
+
+    if (res.ok) {
+      msg.className = 'eval-msg eval-msg--ok';
+      msg.textContent = '✓';
+      const nombre = card.dataset.subnombre;
+      if (state.evaluacionesActuales[nombre]) state.evaluacionesActuales[nombre].valor = valor;
+      await actualizarFeatureEnMapa(state.inmuebleSeleccionado?.id);
+      setTimeout(() => { msg.textContent = ''; msg.className = 'eval-msg'; }, 3000);
+    } else {
+      throw new Error('save failed');
+    }
+  } catch (e) {
+    if (e.message !== 'Session expired') {
+      card.classList.add('is-error');
+      msg.className = 'eval-msg eval-msg--err';
+      msg.textContent = '✗';
+      toast('No se pudo guardar el cambio. Reintenta.', 'error');
+    }
+  } finally {
+    select.disabled = false;
+    card.classList.remove('is-saving');
   }
+}
 
-  container.innerHTML = `
+async function actualizarFeatureEnMapa(inmuebleId) {
+  if (!inmuebleId) return;
+  try {
+    const res = await fetch(`${featureServer}collections/public.detalle_calculo_incendio/items/${inmuebleId}`);
+    if (!res.ok) throw new Error('feature not found');
+    const geojsonFeature = await res.json();
+
+    const existing = geojsonSource.getFeatures().find(f => f.get('id') === inmuebleId);
+    if (existing && geojsonFeature.properties) {
+      Object.entries(geojsonFeature.properties).forEach(([k, v]) => existing.set(k, v));
+      geojsonSource.changed();
+      // Refrescar la ficha y los agregados con el dato nuevo
+      mostrarFichaInmueble(existing);
+      renderizarIndicadores();
+      pintarLeyenda();
+    }
+    incendioLayer.getSource().refresh();
+  } catch {
+    geojsonSource.clear();
+    geojsonSource.refresh();
+  }
+}
+
+// =============================================================================
+// EDITOR: formulario de datos del inmueble
+// =============================================================================
+
+document.getElementById('btn-editar-inmueble').addEventListener('click', () => {
+  const sel = state.inmuebleSeleccionado;
+  if (!sel) return;
+  const cont = document.getElementById(`edit-form-container-${sel.id}`);
+  if (!cont) return;
+
+  if (cont.innerHTML.trim() !== '') { cont.innerHTML = ''; return; }
+
+  const p = sel.props;
+  cont.innerHTML = `
     <div class="edit-inmueble-form">
-      <h4>✏️ Editar Inmueble #${id}</h4>
+      <h4>Editar datos del inmueble</h4>
       <div class="edit-field">
-        <label>Dirección</label>
-        <input type="text" id="edit-direccion-${id}" value="${props.direccion || ''}">
+        <label for="edit-direccion-${sel.id}">Dirección</label>
+        <input type="text" id="edit-direccion-${sel.id}" value="${esc(p.direccion || '')}">
       </div>
       <div class="edit-field">
-        <label>Región</label>
-        <input type="text" id="edit-region-${id}" value="${props.region || ''}">
+        <label for="edit-region-${sel.id}">Región</label>
+        <input type="text" id="edit-region-${sel.id}" value="${esc(p.region || '')}">
       </div>
       <div class="edit-field">
-        <label>Manzana</label>
-        <input type="text" id="edit-manzana-${id}" value="${props.manzana || ''}">
+        <label for="edit-manzana-${sel.id}">Manzana</label>
+        <input type="text" id="edit-manzana-${sel.id}" value="${esc(p.manzana || '')}">
       </div>
       <div class="edit-field">
-        <label>Predio</label>
-        <input type="text" id="edit-predio-${id}" value="${props.predio || ''}">
+        <label for="edit-predio-${sel.id}">Predio</label>
+        <input type="text" id="edit-predio-${sel.id}" value="${esc(p.predio || '')}">
       </div>
       <div class="edit-actions">
-        <button class="btn-save" onclick="guardarEdicionInmueble(${id})">Guardar</button>
-        <button class="btn-cancel" onclick="document.getElementById('edit-form-container-${id}').innerHTML=''">Cancelar</button>
+        <button class="btn btn--primary btn-save" id="btn-guardar-inmueble">Guardar</button>
+        <button class="btn btn--ghost" id="btn-cancelar-inmueble">Cancelar</button>
       </div>
-      <div id="edit-feedback-${id}" class="edit-feedback"></div>
+      <div id="edit-feedback-${sel.id}" class="edit-feedback"></div>
     </div>
   `;
-};
 
-window.guardarEdicionInmueble = async function (id) {
+  document.getElementById('btn-cancelar-inmueble').addEventListener('click', () => { cont.innerHTML = ''; });
+  document.getElementById('btn-guardar-inmueble').addEventListener('click', () => guardarEdicionInmueble(sel.id));
+  cont.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
+
+async function guardarEdicionInmueble(id) {
   const feedback = document.getElementById(`edit-feedback-${id}`);
-  const saveBtn = document.querySelector(`#edit-form-container-${id} .btn-save`);
+  const saveBtn = document.getElementById('btn-guardar-inmueble');
 
   const data = {
     direccion: document.getElementById(`edit-direccion-${id}`)?.value || '',
@@ -759,9 +951,8 @@ window.guardarEdicionInmueble = async function (id) {
   };
 
   saveBtn.disabled = true;
-  saveBtn.textContent = 'Guardando...';
+  saveBtn.textContent = 'Guardando…';
   feedback.className = 'edit-feedback';
-  feedback.style.display = 'none';
 
   try {
     const res = await apiFetch(`${API_BASE}/api/inmuebles/actualizar/${id}/`, {
@@ -772,13 +963,12 @@ window.guardarEdicionInmueble = async function (id) {
     if (res.ok) {
       feedback.className = 'edit-feedback success';
       feedback.textContent = 'Cambios guardados correctamente.';
-      // Reload GeoJSON data to reflect updates
-      geojsonSource.clear();
-      geojsonSource.refresh();
+      toast('Inmueble actualizado.', 'ok');
+      await actualizarFeatureEnMapa(id);
     } else {
       const err = await res.json().catch(() => ({}));
       feedback.className = 'edit-feedback error';
-      feedback.textContent = JSON.stringify(err);
+      feedback.textContent = Object.values(err).flat().join(' ') || 'No se pudo guardar.';
     }
   } catch (e) {
     if (e.message !== 'Session expired') {
@@ -789,281 +979,127 @@ window.guardarEdicionInmueble = async function (id) {
     saveBtn.disabled = false;
     saveBtn.textContent = 'Guardar';
   }
-};
-
-// ===== EDITOR: EVALUACION VALOR =====
-
-async function cargarEvaluacionesEnPanel(inmuebleId) {
-  try {
-    const [evRes, clasesRes] = await Promise.all([
-      apiFetch(`${API_BASE}/api/evaluacion/inmueble/${inmuebleId}/`),
-      apiFetch(`${API_BASE}/api/clases/`)
-    ]);
-    if (!evRes.ok || !clasesRes.ok) throw new Error('Error cargando evaluaciones');
-
-    const evaluaciones = await evRes.json();
-    const todasClases  = await clasesRes.json();
-
-    // sub_indicador_nombre → { id, valor, id_subindicador }
-    const evalLookup = {};
-    evaluaciones.forEach(e => {
-      evalLookup[e.sub_indicador_nombre] = { id: e.id, valor: e.valor, subId: e.id_subindicador };
-    });
-
-    // sub_indicador_id → [{ nombre, valor }] sorted by valor asc
-    const clasesLookup = {};
-    todasClases.forEach(c => {
-      if (!clasesLookup[c.sub_indicador]) clasesLookup[c.sub_indicador] = [];
-      clasesLookup[c.sub_indicador].push({ nombre: c.nombre, valor: c.valor });
-    });
-    Object.values(clasesLookup).forEach(arr => arr.sort((a, b) => a.valor - b.valor));
-
-    document.querySelectorAll('.eval-edit-cell').forEach(cell => {
-      const subNombre = cell.dataset.subind;
-      const ev = evalLookup[subNombre];
-      if (!ev) {
-        cell.innerHTML = '<span style="color:#ccc;font-size:11px;">—</span>';
-        return;
-      }
-
-      const clases = clasesLookup[ev.subId] || [];
-      if (clases.length === 0) {
-        // Fallback to number input if no classes defined for this sub-indicator
-        cell.innerHTML = `
-          <div style="display:flex;align-items:center;gap:4px;">
-            <input type="number" class="clase-valor-input" id="eval-input-${ev.id}"
-                   value="${ev.valor}" min="0" max="5" style="width:52px;">
-            <button class="btn-clase-save" onclick="guardarEvaluacion(${ev.id}, ${inmuebleId})">✓</button>
-            <span class="clase-msg" id="eval-msg-${ev.id}"></span>
-          </div>`;
-        return;
-      }
-
-      const options = clases.map(c =>
-        `<option value="${c.valor}"${c.valor === ev.valor ? ' selected' : ''}>${c.nombre}</option>`
-      ).join('');
-
-      cell.innerHTML = `
-        <div style="display:flex;align-items:center;gap:4px;">
-          <select class="eval-clase-select" id="eval-select-${ev.id}"
-                  onchange="guardarEvaluacion(${ev.id}, ${inmuebleId})">
-            ${options}
-          </select>
-          <span class="clase-msg" id="eval-msg-${ev.id}"></span>
-        </div>`;
-    });
-  } catch (e) {
-    if (e.message !== 'Session expired') {
-      document.querySelectorAll('.eval-val-loading').forEach(el => { el.textContent = '—'; });
-    }
-  }
 }
 
-window.guardarEvaluacion = async function (evaluacionId, inmuebleId) {
-  const select = document.getElementById(`eval-select-${evaluacionId}`);
-  const input  = document.getElementById(`eval-input-${evaluacionId}`);
-  const el = select || input;
-  const msg = document.getElementById(`eval-msg-${evaluacionId}`);
+// =============================================================================
+// EDITOR: administrar clases
+// =============================================================================
 
-  if (!el) return;
-  const valor = parseInt(el.value, 10);
-  if (isNaN(valor) || valor < 0) {
-    if (msg) { msg.textContent = '✗'; msg.style.color = 'red'; }
-    return;
-  }
+const clasesModal = document.getElementById('clases-panel');
 
-  if (el) el.disabled = true;
-  if (msg) { msg.textContent = '…'; msg.style.color = '#aaa'; }
+document.getElementById('btn-administrar-clases').addEventListener('click', abrirPanelClases);
+document.getElementById('btn-cerrar-clases').addEventListener('click', cerrarPanelClases);
+document.getElementById('clases-backdrop').addEventListener('click', cerrarPanelClases);
 
-  try {
-    const res = await apiFetch(`${API_BASE}/api/evaluacion/actualizar/${evaluacionId}/`, {
-      method: 'PATCH',
-      body: JSON.stringify({ valor })
-    });
+function cerrarPanelClases() { clasesModal.hidden = true; }
 
-    if (res.ok) {
-      if (msg) { msg.textContent = '✓'; msg.style.color = '#4caf50'; }
-      await actualizarFeatureEnMapa(inmuebleId);
-    } else {
-      if (msg) { msg.textContent = '✗'; msg.style.color = 'red'; }
-    }
-  } catch (e) {
-    if (e.message !== 'Session expired' && msg) { msg.textContent = '✗'; msg.style.color = 'red'; }
-  } finally {
-    if (el) el.disabled = false;
-    setTimeout(() => { if (msg) msg.textContent = ''; }, 3000);
-  }
-};
-
-async function actualizarFeatureEnMapa(inmuebleId) {
-  try {
-    // Fetch only the updated single feature from pg_featureserv
-    const res = await fetch(
-      `${featureServer}collections/public.detalle_calculo_incendio/items/${inmuebleId}`
-    );
-    if (!res.ok) throw new Error('feature not found');
-    const geojsonFeature = await res.json();
-
-    // Update properties in-place on the existing source feature (no clear/reload flash)
-    const existing = geojsonSource.getFeatures().find(f => f.get('id') === inmuebleId);
-    if (existing && geojsonFeature.properties) {
-      Object.entries(geojsonFeature.properties).forEach(([k, v]) => existing.set(k, v));
-      geojsonSource.changed();
-    }
-
-    // Expire VectorTile cache so new risk colors load for the affected tiles
-    incendioLayer.getSource().refresh();
-  } catch {
-    // Fallback: full reload if single-feature fetch fails
-    geojsonSource.clear();
-    geojsonSource.refresh();
-  }
-}
-
-// ===== EDITOR: CLASSES PANEL =====
-
-window.abrirPanelClases = function () {
-  const panel = document.getElementById('clases-panel');
-  panel.style.display = 'flex';
-  cargarClases();
-};
-
-window.cerrarPanelClases = function () {
-  document.getElementById('clases-panel').style.display = 'none';
-};
-
-async function cargarClases() {
+async function abrirPanelClases() {
+  clasesModal.hidden = false;
   const content = document.getElementById('clases-panel-content');
-  content.innerHTML = '<p style="text-align:center;color:#666;">Cargando...</p>';
+  content.innerHTML = '<p class="panel-placeholder">Cargando clases…</p>';
 
   try {
     const [clasesRes, subRes] = await Promise.all([
       apiFetch(`${API_BASE}/api/clases/`),
       apiFetch(`${API_BASE}/api/subindicadores/`)
     ]);
-
     if (!clasesRes.ok || !subRes.ok) throw new Error('Error al cargar datos');
 
     const clases = await clasesRes.json();
     const subindicadores = await subRes.json();
 
-    // Group clases by sub-indicator
     const subMap = {};
     subindicadores.forEach(s => { subMap[s.id] = s.nombre; });
 
     const grouped = {};
     clases.forEach(c => {
-      const subNombre = subMap[c.sub_indicador] || `SubIndicador ${c.sub_indicador}`;
-      if (!grouped[subNombre]) grouped[subNombre] = [];
-      grouped[subNombre].push(c);
+      const nombre = subMap[c.sub_indicador] || `Sub-indicador ${c.sub_indicador}`;
+      (grouped[nombre] ||= []).push(c);
     });
 
-    let html = '';
-    Object.entries(grouped).forEach(([subNombre, items]) => {
-      html += `<div class="clase-group"><div class="clase-group-title">${subNombre}</div>`;
-      items.forEach(c => {
-        html += `
+    const html = Object.entries(grouped).map(([subNombre, items]) => `
+      <div class="clase-group">
+        <div class="clase-group-title">${esc(subNombre)}</div>
+        ${items.map(c => `
           <div class="clase-row">
-            <span class="clase-nombre">${c.nombre}</span>
-            <input type="number" class="clase-valor-input" id="clase-val-${c.id}" value="${c.valor}" min="0" max="5">
-            <button class="btn-clase-save" onclick="guardarClase(${c.id})">Guardar</button>
+            <span class="clase-nombre">${esc(c.nombre)}</span>
+            <input type="number" class="clase-valor-input" id="clase-val-${c.id}" value="${c.valor}" min="0" max="4" aria-label="Valor de ${esc(c.nombre)}">
+            <button class="btn btn--ghost btn-clase-save" data-clase-id="${c.id}">Guardar</button>
             <span class="clase-msg" id="clase-msg-${c.id}"></span>
           </div>
-        `;
-      });
-      html += `</div>`;
-    });
+        `).join('')}
+      </div>
+    `).join('');
 
-    content.innerHTML = html || '<p style="text-align:center;color:#666;">No hay clases.</p>';
+    content.innerHTML = html || '<p class="panel-placeholder">No hay clases definidas.</p>';
+
+    content.querySelectorAll('.btn-clase-save').forEach(btn => {
+      btn.addEventListener('click', () => guardarClase(Number(btn.dataset.claseId)));
+    });
   } catch (e) {
     if (e.message !== 'Session expired') {
-      content.innerHTML = '<p style="color:red;text-align:center;">Error al cargar clases.</p>';
+      content.innerHTML = '<p class="panel-placeholder">Error al cargar las clases.</p>';
     }
   }
 }
 
-window.guardarClase = async function (id) {
+async function guardarClase(id) {
   const input = document.getElementById(`clase-val-${id}`);
   const msg = document.getElementById(`clase-msg-${id}`);
   const btn = input?.closest('.clase-row')?.querySelector('.btn-clase-save');
-
   if (!input) return;
+
   const valor = parseInt(input.value, 10);
-  if (isNaN(valor)) { msg.textContent = '✗ Inválido'; msg.style.color = 'red'; return; }
+  if (isNaN(valor)) { msg.textContent = '✗'; return; }
 
   if (btn) btn.disabled = true;
-  msg.textContent = '...';
-  msg.style.color = '#aaa';
+  msg.textContent = '…';
 
   try {
     const res = await apiFetch(`${API_BASE}/api/clases/actualizar/${id}/`, {
       method: 'PATCH',
       body: JSON.stringify({ valor })
     });
-
-    if (res.ok) {
-      msg.textContent = '✓';
-      msg.style.color = '#4caf50';
-    } else {
-      msg.textContent = '✗';
-      msg.style.color = 'red';
-    }
+    msg.textContent = res.ok ? '✓' : '✗';
+    if (res.ok) toast('Clase actualizada. El recálculo afecta a todos los inmuebles.', 'ok');
   } catch (e) {
-    if (e.message !== 'Session expired') { msg.textContent = '✗'; msg.style.color = 'red'; }
+    if (e.message !== 'Session expired') msg.textContent = '✗';
   } finally {
     if (btn) btn.disabled = false;
     setTimeout(() => { msg.textContent = ''; }, 3000);
   }
-};
+}
 
-// ===== KML DOWNLOAD =====
+// =============================================================================
+// EXPORTACIONES
+// =============================================================================
 
-window.descargarKML = async function () {
-  const btn = document.getElementById('btn-descargar-kml');
-  const original = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Generando…';
-
+document.getElementById('btn-descargar-kml').addEventListener('click', async () => {
+  cerrarMenus();
+  toast('Generando KML…');
   try {
     const res = await apiFetch(`${API_BASE}/api/crear-kml-detalle/`);
     if (!res.ok) throw new Error('Error al generar KML');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Incendio_Detalle.kml';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    descargarBlob(await res.blob(), 'Incendio_Detalle.kml');
+    toast('KML descargado.', 'ok');
   } catch (e) {
-    if (e.message !== 'Session expired') alert('No se pudo generar el archivo KML.');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
+    if (e.message !== 'Session expired') toast('No se pudo generar el archivo KML.', 'error');
   }
-};
+});
 
-// ===== PDF DOWNLOAD (resumen global, generación asíncrona con Celery) =====
-
-window.descargarPDF = async function () {
-  const btn = document.getElementById('btn-descargar-pdf');
-  const original = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Generando…';
-
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+document.getElementById('btn-descargar-pdf').addEventListener('click', async () => {
+  cerrarMenus();
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  toast('Generando PDF resumen…');
 
   try {
-    // 1) Encolar la generación
     const resGen = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/`, {
       method: 'POST',
-      body: JSON.stringify({ amenaza_id: 1 }),
+      body: JSON.stringify({ amenaza_id: state.amenazaActiva?.id || 1 })
     });
     if (!resGen.ok) throw new Error('Error al iniciar la generación');
     const { task_id } = await resGen.json();
 
-    // 2) Poll del estado hasta terminar
     for (;;) {
       await sleep(1500);
       const resEst = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/estado/${task_id}/`);
@@ -1071,42 +1107,155 @@ window.descargarPDF = async function () {
       const { estado } = await resEst.json();
       if (estado === 'SUCCESS') break;
       if (estado === 'FAILURE') throw new Error('La generación del PDF falló');
-      btn.textContent = 'Generando…';
     }
 
-    // 3) Descargar el PDF
-    btn.textContent = 'Descargando…';
     const resPdf = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/descargar/${task_id}/`);
     if (!resPdf.ok) throw new Error('Error al descargar el PDF');
-    const blob = await resPdf.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Resumen_Riesgo_Incendio.pdf';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    descargarBlob(await resPdf.blob(), 'Resumen_Riesgo.pdf');
+    toast('PDF descargado.', 'ok');
   } catch (e) {
-    if (e.message !== 'Session expired') alert('No se pudo generar el PDF de resumen.');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
+    if (e.message !== 'Session expired') toast('No se pudo generar el PDF de resumen.', 'error');
   }
-};
+});
 
-// ===== MAP EVENTS =====
+function descargarBlob(blob, nombre) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// =============================================================================
+// MENÚS
+// =============================================================================
+
+function cerrarMenus() {
+  document.getElementById('export-menu').hidden = true;
+  document.getElementById('user-menu').hidden = true;
+  document.getElementById('btn-export').setAttribute('aria-expanded', 'false');
+  document.getElementById('user-chip').setAttribute('aria-expanded', 'false');
+}
+
+function alternarMenu(botonId, menuId) {
+  const menu = document.getElementById(menuId);
+  const abierto = !menu.hidden;
+  cerrarMenus();
+  if (!abierto) {
+    menu.hidden = false;
+    document.getElementById(botonId).setAttribute('aria-expanded', 'true');
+  }
+}
+
+document.getElementById('btn-export').addEventListener('click', e => {
+  e.stopPropagation();
+  alternarMenu('btn-export', 'export-menu');
+});
+document.getElementById('user-chip').addEventListener('click', e => {
+  e.stopPropagation();
+  alternarMenu('user-chip', 'user-menu');
+});
+document.addEventListener('click', cerrarMenus);
+document.querySelectorAll('.menu').forEach(m => m.addEventListener('click', e => e.stopPropagation()));
+
+// =============================================================================
+// BÚSQUEDA
+// =============================================================================
+
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (q.length < 2) { searchResults.hidden = true; return; }
+
+  const matches = geojsonSource.getFeatures().filter(f => {
+    const p = f.getProperties();
+    return [p.direccion, p.rol_sii, p.manzana, p.predio]
+      .some(v => String(v ?? '').toLowerCase().includes(q));
+  }).slice(0, 20);
+
+  if (!matches.length) {
+    searchResults.innerHTML = '<div class="search-empty">Sin resultados.</div>';
+    searchResults.hidden = false;
+    return;
+  }
+
+  searchResults.innerHTML = matches.map((f, i) => {
+    const p = f.getProperties();
+    const nivel = nivelTotal(riesgoTotalDe(propsDetalle(f)));
+    return `<button class="search-item" data-idx="${i}">
+              <span class="legend-swatch" style="background:${nivel.fill}"></span>
+              <span class="search-item-main">
+                <span class="search-item-dir">${esc(p.direccion || 'Sin dirección')}</span>
+                <span class="search-item-sub">Rol SII ${esc(p.rol_sii || '—')}${p.manzana ? ` · Mz ${esc(p.manzana)}` : ''}</span>
+              </span>
+            </button>`;
+  }).join('');
+  searchResults.hidden = false;
+
+  searchResults.querySelectorAll('.search-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const feature = matches[Number(btn.dataset.idx)];
+      irAFeature(feature);
+      searchResults.hidden = true;
+      searchInput.value = '';
+    });
+  });
+});
+
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { searchResults.hidden = true; searchInput.blur(); }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.topbar-search')) searchResults.hidden = true;
+});
+
+function irAFeature(feature) {
+  const geom = feature.getGeometry();
+  if (!geom) return;
+  map.getView().fit(geom.getExtent(), { duration: 500, maxZoom: 19, padding: [80, 80, 80, 80] });
+  mostrarFichaInmueble(feature);
+}
+
+// =============================================================================
+// CONTROLES DEL MAPA
+// =============================================================================
+
+document.getElementById('btn-zoom-in').addEventListener('click', () => {
+  const v = map.getView();
+  v.animate({ zoom: v.getZoom() + 1, duration: 220 });
+});
+document.getElementById('btn-zoom-out').addEventListener('click', () => {
+  const v = map.getView();
+  v.animate({ zoom: v.getZoom() - 1, duration: 220 });
+});
+document.getElementById('btn-centrar').addEventListener('click', () => {
+  map.getView().animate({ center: VISTA_INICIAL.center, zoom: VISTA_INICIAL.zoom, duration: 400 });
+});
+
+document.getElementById('btn-toggle-left').addEventListener('click', togglePanelIzquierdo);
+document.getElementById('btn-cerrar-ficha').addEventListener('click', cerrarFicha);
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (!clasesModal.hidden) cerrarPanelClases();
+    else if (!shell.classList.contains('is-right-closed')) cerrarFicha();
+  }
+});
+
+// =============================================================================
+// EVENTOS DEL MAPA
+// =============================================================================
 
 map.on('click', function (evt) {
-  var feature = map.forEachFeatureAtPixel(evt.pixel, function (f, layer) {
-    return layer === geojsonLayer ? f : null;
-  });
-  if (!feature) {
-    feature = map.forEachFeatureAtPixel(evt.pixel, function (f, layer) {
-      return layer === incendioLayer ? f : null;
-    });
-  }
-  if (feature) mostrarPanelInmueble(evt.coordinate, feature);
+  const feature = map.forEachFeatureAtPixel(evt.pixel, (f, layer) =>
+    (layer === geojsonLayer || layer === indicadorLayer) ? f : null
+  );
+  if (feature) mostrarFichaInmueble(feature);
 });
 
 map.on('pointermove', function (evt) {
@@ -1116,12 +1265,39 @@ map.on('pointermove', function (evt) {
   map.getTargetElement().style.cursor = hit ? 'pointer' : '';
 });
 
-geojsonLayer.getSource().on('featuresloadend', function () {
-  const features = geojsonLayer.getSource().getFeatures();
-  console.log(`GeoJSON cargado: ${features.length} features`);
-  if (document.getElementById('stats-panel').classList.contains('visible')) cargarIndicadores();
-  if (document.getElementById('chart-panel').classList.contains('visible')) actualizarEstadisticas();
+geojsonSource.on('featuresloadend', function () {
+  renderizarIndicadores();
+  pintarLeyenda();
 });
 
-// ===== START =====
-initApp();
+geojsonSource.on('featuresloaderror', function () {
+  toast('No se pudieron cargar los datos del mapa.', 'error');
+});
+
+// =============================================================================
+// ARRANQUE
+// =============================================================================
+
+async function arrancarConsola() {
+  shell.classList.add('is-right-closed');
+  await cargarAmenazas();
+  geojsonSource.refresh();
+  actualizarTamanoMapa();
+}
+
+async function init() {
+  const token = getToken();
+  if (token && !isTokenExpired(token)) {
+    const payload = decodeToken(token);
+    state.role = payload?.role || 'viewer';
+    state.username = payload?.username || 'Usuario';
+    ocultarLogin();
+    pintarUsuario();
+    await arrancarConsola();
+  } else {
+    clearAuth();
+    mostrarLogin();
+  }
+}
+
+init();
