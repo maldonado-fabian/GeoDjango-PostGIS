@@ -19,7 +19,7 @@ from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubInd
 from .serializers import (
     AmenazasSerializer, ClasesSerializer, EvaluacionSerializer, EvaluacionDetalleSerializer,
     IndicadoresSerializer, InmueblesSerializer, InmueblesUpdateSerializer,
-    SubIndicadoresSerializer,
+    ReporteConfigSerializer, SubIndicadoresSerializer,
 )
 from django.conf import settings
 from sqlalchemy import create_engine
@@ -724,18 +724,41 @@ from .tasks import generar_pdf_resumen_task
 
 
 class GenerarPDFResumenView(APIView):
-    """POST: encola la generación del PDF de resumen y devuelve el task_id."""
+    """POST: encola la generación del informe y devuelve el task_id.
+
+    Acepta `modo` ('ejecutivo' o 'completo') y, opcionalmente, una lista blanca
+    de secciones o una de exclusión.
+    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        amenaza_id = request.data.get('amenaza_id', 1)
-        try:
-            amenaza_id = int(amenaza_id)
-        except (TypeError, ValueError):
-            return Response({'error': 'amenaza_id inválido'}, status=status.HTTP_400_BAD_REQUEST)
-        tarea = generar_pdf_resumen_task.delay(amenaza_id)
-        return Response({'task_id': tarea.id, 'estado': 'PENDING'},
+        datos = dict(request.data or {})
+        datos.setdefault('amenaza_id', AMENAZA_POR_DEFECTO)
+
+        serializer = ReporteConfigSerializer(data=datos)
+        serializer.is_valid(raise_exception=True)
+        cfg = serializer.validated_data
+
+        if not Amenazas.objects.filter(pk=cfg['amenaza_id']).exists():
+            return Response({'amenaza_id': 'No existe la amenaza indicada.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        opciones = {k: v for k, v in cfg.items() if k not in ('amenaza_id', 'modo')}
+        tarea = generar_pdf_resumen_task.delay(cfg['amenaza_id'], cfg['modo'], opciones)
+        return Response({'task_id': tarea.id, 'estado': 'PENDING', 'modo': cfg['modo']},
                         status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def secciones_reporte(request):
+    """Secciones disponibles del informe y en qué modo aparece cada una.
+
+    Permite que la interfaz arme el selector sin duplicar los nombres en JS.
+    """
+    from .reports import sections
+    from .reports.config import MODOS
+    return Response({'modos': list(MODOS), 'secciones': sections.catalogo()})
 
 
 class EstadoPDFResumenView(APIView):

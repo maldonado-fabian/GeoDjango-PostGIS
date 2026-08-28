@@ -58,6 +58,7 @@ urlpatterns = [
     ,path('crear-kml-detalle/', views.CrearKMLDetalleView.as_view(), name='crear-kml-detalle')
 
     # Reporte PDF de resumen global (asíncrono con Celery)
+    ,path('reportes/secciones/', views.secciones_reporte, name='secciones-reporte')
     ,path('generar-pdf-resumen/', views.GenerarPDFResumenView.as_view(), name='generar-pdf-resumen')
     ,path('generar-pdf-resumen/estado/<str:task_id>/', views.EstadoPDFResumenView.as_view(), name='estado-pdf-resumen')
     ,path('generar-pdf-resumen/descargar/<str:task_id>/', views.DescargarPDFResumenView.as_view(), name='descargar-pdf-resumen')

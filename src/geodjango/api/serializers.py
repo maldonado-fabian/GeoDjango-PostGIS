@@ -2,6 +2,11 @@ from rest_framework import serializers
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
 from django.contrib.gis.geos import GEOSGeometry
 
+# `reports.config` sólo importa dataclasses: no arrastra matplotlib ni pandas al
+# proceso web. El registro de secciones sí es pesado, y por eso se importa
+# dentro de los validadores y no aquí.
+from .reports.config import MODO_EJECUTIVO, MODOS
+
 class AmenazasSerializer(serializers.ModelSerializer):
     class Meta:
         model = Amenazas
@@ -45,6 +50,40 @@ class InmueblesUpdateSerializer(serializers.ModelSerializer):
         model = Inmuebles
         fields = ['id', 'direccion', 'region', 'manzana', 'predio']
         read_only_fields = ['id']
+
+class ReporteConfigSerializer(serializers.Serializer):
+    """Parámetros de generación del informe PDF.
+
+    Valida contra el registro de secciones, para que pedir una sección
+    inexistente devuelva 400 y no un PDF silenciosamente incompleto.
+    """
+
+    amenaza_id = serializers.IntegerField(min_value=1)
+    modo = serializers.ChoiceField(choices=MODOS, default=MODO_EJECUTIVO)
+    secciones = serializers.ListField(child=serializers.CharField(), required=False)
+    excluir = serializers.ListField(child=serializers.CharField(), required=False)
+    amenaza_comparacion = serializers.IntegerField(required=False, allow_null=True)
+    top_criticos = serializers.IntegerField(required=False, min_value=5, max_value=400)
+    top_manzanas = serializers.IntegerField(required=False, min_value=3, max_value=100)
+    incluir_indice = serializers.BooleanField(required=False)
+    basemap = serializers.BooleanField(required=False)
+
+    def validate_secciones(self, valor):
+        return self._validar_ids(valor)
+
+    def validate_excluir(self, valor):
+        return self._validar_ids(valor)
+
+    def _validar_ids(self, valor):
+        from .reports import sections
+        desconocidas = sorted(set(valor) - set(sections.REGISTRY))
+        if desconocidas:
+            raise serializers.ValidationError(
+                f'Secciones desconocidas: {", ".join(desconocidas)}. '
+                f'Disponibles: {", ".join(sorted(sections.REGISTRY))}'
+            )
+        return valor
+
 
 class RiesgoConteoSerializer(serializers.Serializer):
     nivel_riesgo = serializers.CharField()
