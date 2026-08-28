@@ -6,9 +6,6 @@ import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
-import VectorTileLayer from 'ol/layer/VectorTile';
-import VectorTileSource from 'ol/source/VectorTile';
-import MVT from 'ol/format/MVT';
 import GeoJSON from 'ol/format/GeoJSON';
 import XYZ from 'ol/source/XYZ';
 import { defaults as defaultControls } from 'ol/control';
@@ -16,11 +13,22 @@ import { Style, Fill, Stroke, Circle } from 'ol/style';
 
 // ===== SERVIDORES =====
 const API_BASE = 'http://localhost:8000';
-const vectorServer = 'http://localhost:7800/';
 const featureServer = 'http://localhost:9000/';
 
-const incendioUrl = vectorServer + 'public.riesgo_incendio/{z}/{x}/{y}.pbf';
-const geojsonUrl = featureServer + 'collections/public.detalle_calculo_incendio/items?limit=2000';
+// Amenaza que se muestra si aún no se cargó el selector. Debe coincidir con
+// AMENAZA_POR_DEFECTO de api/views.py.
+const AMENAZA_POR_DEFECTO = 1;
+
+/** Detalle de riesgo de una amenaza, servido por pg_featureserv. */
+function geojsonUrl(amenazaId) {
+  return `${featureServer}functions/postgisftw.detalle_calculo/items.json`
+       + `?amenaza_id=${amenazaId}&limit=2000`;
+}
+
+function detalleInmuebleUrl(amenazaId, inmuebleId) {
+  return `${featureServer}functions/postgisftw.detalle_calculo/items.json`
+       + `?amenaza_id=${amenazaId}&inmueble_id=${inmuebleId}&limit=1`;
+}
 
 // =============================================================================
 // ESCALA DE RIESGO — fuente única de verdad en el cliente.
@@ -188,16 +196,13 @@ function estiloPorValor(valor, escala) {
   });
 }
 
-const incendioLayer = new VectorTileLayer({
-  source: new VectorTileSource({ format: new MVT(), url: incendioUrl }),
-  style: feature => estiloPorValor(feature.get('riesgo') || 0, 'total'),
-  visible: true
-});
+/** Vista general: color por índice de riesgo total del inmueble. */
+const estiloTotal = feature => estiloPorValor(riesgoTotalDe(propsDetalle(feature)), 'total');
 
 const geojsonSource = new VectorSource({
   format: new GeoJSON(),
   loader: function (extent, resolution, projection, success, failure) {
-    fetch(geojsonUrl)
+    fetch(geojsonUrl(state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO))
       .then(r => { if (!r.ok) throw new Error('GeoJSON load failed'); return r.json(); })
       .then(data => {
         const features = new GeoJSON().readFeatures(data, { featureProjection: projection });
@@ -209,16 +214,20 @@ const geojsonSource = new VectorSource({
 });
 
 /**
- * Capa invisible pero CLICKEABLE: el color general lo pintan las teselas de
- * `riesgo_incendio`; esta capa sólo aporta la geometría con la que se detecta
- * el clic y los atributos del inmueble. Debe llevar un relleno transparente
- * (no un Style vacío) o OpenLayers no la considera en `forEachFeatureAtPixel`.
+ * Relleno transparente —no un Style vacío— para cuando esta capa sólo aporta la
+ * geometría clickeable: sin fill, OpenLayers no la considera en
+ * `forEachFeatureAtPixel` y el mapa deja de responder al clic.
  */
 const estiloClickeable = new Style({ fill: new Fill({ color: 'rgba(0,0,0,0)' }) });
 
+/**
+ * Capa principal. En la vista general pinta el índice total; al entrar a un
+ * indicador o sub-indicador pasa a transparente y `indicadorLayer` toma el color,
+ * pero sigue capturando el clic.
+ */
 const geojsonLayer = new VectorLayer({
   source: geojsonSource,
-  style: () => estiloClickeable
+  style: estiloTotal
 });
 
 const indicadorLayer = new VectorLayer({
@@ -246,7 +255,7 @@ const map = new Map({
   target: 'map',
   controls: defaultControls({ zoom: false, rotate: false, attribution: false }),
   view: new View({ center: VISTA_INICIAL.center, zoom: VISTA_INICIAL.zoom }),
-  layers: [baseLayer, geojsonLayer, incendioLayer, indicadorLayer, selectionLayer]
+  layers: [baseLayer, geojsonLayer, indicadorLayer, selectionLayer]
 });
 
 // =============================================================================
@@ -369,16 +378,6 @@ document.getElementById('btn-logout').addEventListener('click', () => {
 // AMENAZAS
 // =============================================================================
 
-/**
- * Sólo la amenaza "incendio" tiene capas de cálculo en PostGIS
- * (public.riesgo_incendio y public.detalle_calculo_incendio).
- * Las demás se listan desde la API pero quedan deshabilitadas hasta que
- * existan sus vistas equivalentes en la base.
- */
-function amenazaOperativa(amenaza) {
-  return /incendio/i.test(amenaza.nombre || '');
-}
-
 async function cargarAmenazas() {
   const cont = document.getElementById('amenaza-selector');
   try {
@@ -392,22 +391,20 @@ async function cargarAmenazas() {
 
   if (!state.amenazas.length) { cont.innerHTML = ''; return; }
 
-  const operativa = state.amenazas.find(amenazaOperativa) || state.amenazas[0];
-  state.amenazaActiva = operativa;
+  state.amenazaActiva = state.amenazas.find(a => a.id === AMENAZA_POR_DEFECTO)
+                     || state.amenazas[0];
 
   cont.innerHTML = state.amenazas.map(a => {
     const activa = a.id === state.amenazaActiva.id;
-    const habilitada = amenazaOperativa(a);
     return `<button type="button" role="tab"
               class="amenaza-opt${activa ? ' is-active' : ''}"
               data-amenaza-id="${a.id}"
-              aria-selected="${activa}"
-              ${habilitada ? '' : 'disabled title="Sin capa de cálculo en la base de datos"'}>
+              aria-selected="${activa}">
               ${esc(a.nombre)}
             </button>`;
   }).join('');
 
-  cont.querySelectorAll('.amenaza-opt:not(:disabled)').forEach(btn => {
+  cont.querySelectorAll('.amenaza-opt').forEach(btn => {
     btn.addEventListener('click', () => seleccionarAmenaza(Number(btn.dataset.amenazaId)));
   });
 
@@ -426,6 +423,10 @@ function seleccionarAmenaza(id) {
   pintarTituloAmenaza();
   volverVistaGeneral();
   cerrarFicha();
+  // El detalle de riesgo es por amenaza: hay que traer el GeoJSON de nuevo.
+  // `refresh()` limpia la fuente y vuelve a invocar el loader, que lee
+  // state.amenazaActiva — ya actualizado más arriba.
+  geojsonSource.refresh();
 }
 
 function pintarTituloAmenaza() {
@@ -606,7 +607,7 @@ function pintarSegmentado() {
 
 function volverVistaGeneral() {
   state.vista = { tipo: 'total', nombre: null };
-  incendioLayer.setVisible(true);
+  geojsonLayer.setStyle(estiloTotal);
   indicadorLayer.setVisible(false);
   document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
   pintarSegmentado();
@@ -614,7 +615,7 @@ function volverVistaGeneral() {
 
 function seleccionarIndicador(nombre) {
   state.vista = { tipo: 'indicador', nombre };
-  incendioLayer.setVisible(false);
+  geojsonLayer.setStyle(estiloClickeable);
   indicadorLayer.setVisible(true);
   indicadorLayer.setStyle(feature => {
     const ind = (propsDetalle(feature).indicadores || []).find(i => i.indicador_nombre === nombre);
@@ -631,7 +632,7 @@ function seleccionarIndicador(nombre) {
 
 function seleccionarSubindicador(nombre) {
   state.vista = { tipo: 'subindicador', nombre };
-  incendioLayer.setVisible(false);
+  geojsonLayer.setStyle(estiloClickeable);
   indicadorLayer.setVisible(true);
   indicadorLayer.setStyle(feature => {
     let valor = 0;
@@ -772,9 +773,12 @@ function mostrarFichaInmueble(feature) {
 
 async function cargarEvaluacionesEnFicha(inmuebleId) {
   try {
+    // Acotar a la amenaza activa: si no, la ficha mezcla los sub-indicadores de
+    // todas las amenazas evaluadas para el inmueble.
+    const amenazaId = state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO;
     const [evRes, clasesRes] = await Promise.all([
-      apiFetch(`${API_BASE}/api/evaluacion/inmueble/${inmuebleId}/`),
-      apiFetch(`${API_BASE}/api/clases/`)
+      apiFetch(`${API_BASE}/api/evaluacion/inmueble/${inmuebleId}/?amenaza_id=${amenazaId}`),
+      apiFetch(`${API_BASE}/api/clases/?amenaza_id=${amenazaId}`)
     ]);
     if (!evRes.ok || !clasesRes.ok) throw new Error('Error cargando evaluaciones');
 
@@ -874,9 +878,12 @@ async function guardarEvaluacion(card, evaluacionId, select, msg) {
 async function actualizarFeatureEnMapa(inmuebleId) {
   if (!inmuebleId) return;
   try {
-    const res = await fetch(`${featureServer}collections/public.detalle_calculo_incendio/items/${inmuebleId}`);
+    const amenazaId = state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO;
+    const res = await fetch(detalleInmuebleUrl(amenazaId, inmuebleId));
     if (!res.ok) throw new Error('feature not found');
-    const geojsonFeature = await res.json();
+    // La función devuelve un FeatureCollection aunque traiga un solo inmueble.
+    const geojsonFeature = (await res.json()).features?.[0];
+    if (!geojsonFeature) throw new Error('feature not found');
 
     const existing = geojsonSource.getFeatures().find(f => f.get('id') === inmuebleId);
     if (existing && geojsonFeature.properties) {
@@ -887,7 +894,7 @@ async function actualizarFeatureEnMapa(inmuebleId) {
       renderizarIndicadores();
       pintarLeyenda();
     }
-    incendioLayer.getSource().refresh();
+    geojsonLayer.changed();
   } catch {
     geojsonSource.clear();
     geojsonSource.refresh();
@@ -1078,9 +1085,11 @@ document.getElementById('btn-descargar-kml').addEventListener('click', async () 
   cerrarMenus();
   toast('Generando KML…');
   try {
-    const res = await apiFetch(`${API_BASE}/api/crear-kml-detalle/`);
+    const amenazaId = state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO;
+    const res = await apiFetch(`${API_BASE}/api/crear-kml-detalle/?amenaza_id=${amenazaId}`);
     if (!res.ok) throw new Error('Error al generar KML');
-    descargarBlob(await res.blob(), 'Incendio_Detalle.kml');
+    const nombre = (state.amenazaActiva?.nombre || 'Riesgo').replace(/\s+/g, '_');
+    descargarBlob(await res.blob(), `${nombre}_Detalle.kml`);
     toast('KML descargado.', 'ok');
   } catch (e) {
     if (e.message !== 'Session expired') toast('No se pudo generar el archivo KML.', 'error');
@@ -1095,7 +1104,7 @@ document.getElementById('btn-descargar-pdf').addEventListener('click', async () 
   try {
     const resGen = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/`, {
       method: 'POST',
-      body: JSON.stringify({ amenaza_id: state.amenazaActiva?.id || 1 })
+      body: JSON.stringify({ amenaza_id: state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO })
     });
     if (!resGen.ok) throw new Error('Error al iniciar la generación');
     const { task_id } = await resGen.json();
@@ -1111,7 +1120,8 @@ document.getElementById('btn-descargar-pdf').addEventListener('click', async () 
 
     const resPdf = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/descargar/${task_id}/`);
     if (!resPdf.ok) throw new Error('Error al descargar el PDF');
-    descargarBlob(await resPdf.blob(), 'Resumen_Riesgo.pdf');
+    const nombre = (state.amenazaActiva?.nombre || 'Riesgo').replace(/\s+/g, '_');
+    descargarBlob(await resPdf.blob(), `Resumen_${nombre}.pdf`);
     toast('PDF descargado.', 'ok');
   } catch (e) {
     if (e.message !== 'Session expired') toast('No se pudo generar el PDF de resumen.', 'error');

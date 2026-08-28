@@ -11,6 +11,7 @@ from rest_framework import status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsEditor
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
@@ -34,6 +35,33 @@ def me(request):
     user = request.user
     role = 'editor' if (user.is_superuser or user.groups.filter(name='editor').exists()) else 'viewer'
     return Response({'username': user.username, 'role': role})
+
+
+# ── Amenaza activa ────────────────────────────────────────────────────────────
+
+# Escala del índice de riesgo. Debe coincidir con RIESGO_MAX de src/mapa/main.js
+# y con api/reports/niveles.py.
+RIESGO_MAX = 4
+
+# Amenaza por omisión cuando la petición no la indica: Incendio, la única que
+# existía antes de que la plataforma fuera multi-amenaza.
+AMENAZA_POR_DEFECTO = 1
+
+
+def amenaza_id_de(request, default=None):
+    """Lee `?amenaza_id=` de la query string. `default` si no viene."""
+    bruto = request.query_params.get('amenaza_id')
+    if bruto in (None, ''):
+        return default
+    try:
+        return int(bruto)
+    except (TypeError, ValueError):
+        raise ValidationError({'amenaza_id': 'Debe ser un entero.'})
+
+
+def nombre_amenaza(amenaza_id):
+    """Nombre de la amenaza, para titular exportaciones. '' si no existe."""
+    return Amenazas.objects.filter(pk=amenaza_id).values_list('nombre', flat=True).first() or ''
 
 
 # ── Amenazas ──────────────────────────────────────────────────────────────────
@@ -87,6 +115,9 @@ def actualizar_amenaza(request, pk):
 @permission_classes([IsAuthenticated])
 def lista_clases(request):
     clases = Clases.objects.all()
+    amenaza_id = amenaza_id_de(request)
+    if amenaza_id is not None:
+        clases = clases.filter(sub_indicador__indicador__amenaza_id=amenaza_id)
     serializer = ClasesSerializer(clases, many=True)
     return Response(serializer.data)
 
@@ -143,6 +174,11 @@ def lista_evaluaciones(request):
 @permission_classes([IsAuthenticated])
 def lista_evaluaciones_inmueble(request, pk):
     evaluaciones = Evaluacion.objects.filter(id_inmueble=pk).select_related('id_subindicador')
+    # Sin este filtro la ficha del mapa mezclaría los sub-indicadores de todas
+    # las amenazas evaluadas para el inmueble.
+    amenaza_id = amenaza_id_de(request)
+    if amenaza_id is not None:
+        evaluaciones = evaluaciones.filter(id_subindicador__indicador__amenaza_id=amenaza_id)
     serializer = EvaluacionDetalleSerializer(evaluaciones, many=True)
     return Response(serializer.data)
 
@@ -188,6 +224,9 @@ def actualizar_evaluacion(request, pk):
 @permission_classes([IsAuthenticated])
 def lista_indicadores(request):
     indicadores = Indicadores.objects.all()
+    amenaza_id = amenaza_id_de(request)
+    if amenaza_id is not None:
+        indicadores = indicadores.filter(amenaza_id=amenaza_id)
     serializer = IndicadoresSerializer(indicadores, many=True)
     return Response(serializer.data)
 
@@ -233,6 +272,9 @@ def actualizar_indicador(request, pk):
 @permission_classes([IsAuthenticated])
 def lista_subindicadores(request):
     subindicadores = SubIndicadores.objects.all()
+    amenaza_id = amenaza_id_de(request)
+    if amenaza_id is not None:
+        subindicadores = subindicadores.filter(indicador__amenaza_id=amenaza_id)
     serializer = SubIndicadoresSerializer(subindicadores, many=True)
     return Response(serializer.data)
 
@@ -325,21 +367,26 @@ def actualizar_inmueble(request, pk):
 
 # ── Geospatial exports (editor-only write ops, read via GET) ──────────────────
 
-class CrearSHPView(APIView):
-    permission_classes = [IsAuthenticated]
+def _engine():
+    url = ("postgresql://" + os.getenv('DATABASE_USER') + ":" + os.getenv('DATABASE_PASSWORD')
+           + "@" + os.getenv('DATABASE_HOST') + ":" + os.getenv('DATABASE_PORT')
+           + "/" + os.getenv('DATABASE_NAME'))
+    return create_engine(url)
 
-    def get(self, request):
-        db_connection_url = "postgresql://"+os.getenv('DATABASE_USER')+":"+os.getenv('DATABASE_PASSWORD')+"@"+os.getenv('DATABASE_HOST')+":"+os.getenv('DATABASE_PORT')+"/"+os.getenv('DATABASE_NAME')
-        con = create_engine(db_connection_url)
 
-        sql = """
+def sql_indice_por_inmueble(amenaza_id):
+    """Índice de riesgo total por inmueble para una amenaza, con su color de nivel.
+
+    Lo comparten las exportaciones a SHP y a KML. `amenaza_id` se castea a int
+    antes de interpolarse.
+    """
+    return f"""
         SELECT id_inmueble, direccion, rol_sii, SUM(total) as indice_de_riesgo, geom,
             CASE
                 WHEN SUM(total) <= 1.75 THEN '#00FF00'
-                WHEN SUM(total) <= 2.5 THEN '#FFFF00'
+                WHEN SUM(total) <= 2.5  THEN '#FFFF00'
                 WHEN SUM(total) <= 3.25 THEN '#FFA500'
-                WHEN SUM(total) <= 4.76 THEN '#FF0000'
-                ELSE '#FFFFFF'
+                ELSE '#FF0000'
             END as symbol_color
         FROM (
             SELECT e.id_inmueble, i.geom, i.direccion, i.rol_sii, ind.id as indicador_id,
@@ -348,17 +395,25 @@ class CrearSHPView(APIView):
             JOIN sub_indicadores si ON e.id_subindicador = si.id
             JOIN indicadores ind ON si.indicador_id = ind.id
             JOIN inmuebles i ON e.id_inmueble = i.id
-            WHERE ind.amenaza_id = 1
+            WHERE ind.amenaza_id = {int(amenaza_id)}
             GROUP BY e.id_inmueble, ind.id, ind.peso, i.geom, i.direccion, i.rol_sii
         ) as subtotales
         GROUP BY id_inmueble, geom, direccion, rol_sii
         ORDER BY id_inmueble;
-        """
+    """
 
-        gdf = gpd.read_postgis(sql, con)
+
+class CrearSHPView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        con = _engine()
+        amenaza_id = amenaza_id_de(request, AMENAZA_POR_DEFECTO)
+
+        gdf = gpd.read_postgis(sql_indice_por_inmueble(amenaza_id), con)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            base_name = "Incendio"
+            base_name = nombre_amenaza(amenaza_id).replace(' ', '_') or 'Riesgo'
             shp_path = os.path.join(temp_dir, f"{base_name}.shp")
             gdf.to_file(shp_path, driver='ESRI Shapefile', encoding='utf-8')
 
@@ -467,32 +522,11 @@ class CrearKMLView(APIView):
         import simplekml
         from shapely.geometry import Point, Polygon, MultiPolygon
 
-        db_connection_url = "postgresql://"+os.getenv('DATABASE_USER')+":"+os.getenv('DATABASE_PASSWORD')+"@"+os.getenv('DATABASE_HOST')+":"+os.getenv('DATABASE_PORT')+"/"+os.getenv('DATABASE_NAME')
-        con = create_engine(db_connection_url)
+        con = _engine()
+        amenaza_id = amenaza_id_de(request, AMENAZA_POR_DEFECTO)
+        amenaza = nombre_amenaza(amenaza_id)
 
-        sql = """
-        SELECT id_inmueble, direccion, rol_sii, SUM(total) as indice_de_riesgo, geom,
-            CASE
-                WHEN SUM(total) <= 1.75 THEN '#00FF00'
-                WHEN SUM(total) <= 2.5 THEN '#FFFF00'
-                WHEN SUM(total) <= 3.25 THEN '#FFA500'
-                WHEN SUM(total) <= 4.76 THEN '#FF0000'
-                ELSE '#FFFFFF'
-            END as symbol_color
-        FROM (
-            SELECT e.id_inmueble, i.geom, i.direccion, i.rol_sii, ind.id as indicador_id,
-                   SUM(e.valor * si.peso) * ind.peso as total
-            FROM evaluacion e
-            JOIN sub_indicadores si ON e.id_subindicador = si.id
-            JOIN indicadores ind ON si.indicador_id = ind.id
-            JOIN inmuebles i ON e.id_inmueble = i.id
-            WHERE ind.amenaza_id = 1
-            GROUP BY e.id_inmueble, ind.id, ind.peso, i.geom, i.direccion, i.rol_sii
-        ) as subtotales
-        GROUP BY id_inmueble, geom, direccion, rol_sii;
-        """
-
-        gdf = gpd.read_postgis(sql, con, geom_col='geom')
+        gdf = gpd.read_postgis(sql_indice_por_inmueble(amenaza_id), con, geom_col='geom')
         gdf = gdf.to_crs(epsg=4326)
 
         kml = simplekml.Kml()
@@ -508,7 +542,7 @@ class CrearKMLView(APIView):
             geom = row['geom']
             color = hex_to_kml_color(row['symbol_color'])
             indice = row['indice_de_riesgo']
-            fill_pct = min(round(indice / 4.76 * 100), 100)
+            fill_pct = min(round(indice / RIESGO_MAX * 100), 100)
             if indice <= 1.75:
                 nivel = "Bajo"
             elif indice <= 2.5:
@@ -521,7 +555,7 @@ class CrearKMLView(APIView):
             description = f"""
             <div style="font-family:Arial,sans-serif;width:280px;">
               <div style="background:{row['symbol_color']};padding:10px 14px;border-radius:6px 6px 0 0;">
-                <div style="font-size:11px;color:rgba(255,255,255,0.8);text-transform:uppercase;letter-spacing:1px;">Riesgo de Incendio</div>
+                <div style="font-size:11px;color:rgba(255,255,255,0.8);text-transform:uppercase;letter-spacing:1px;">Riesgo de {amenaza}</div>
                 <div style="font-size:17px;font-weight:bold;color:white;margin-top:2px;">Inmueble #{row['id_inmueble']}</div>
                 <div style="display:inline-block;background:rgba(255,255,255,0.25);color:white;padding:2px 10px;border-radius:10px;font-size:12px;margin-top:4px;">{nivel}</div>
               </div>
@@ -540,7 +574,7 @@ class CrearKMLView(APIView):
                   <table style="width:100%;">
                     <tr>
                       <td style="font-size:12px;color:#555;">Índice de Riesgo</td>
-                      <td style="font-size:14px;font-weight:bold;text-align:right;color:{row['symbol_color']};">{round(indice, 2)} / 4.76</td>
+                      <td style="font-size:14px;font-weight:bold;text-align:right;color:{row['symbol_color']};">{round(indice, 2)} / {RIESGO_MAX}</td>
                     </tr>
                   </table>
                   <div style="background:#e0e0e0;border-radius:4px;height:8px;margin-top:6px;">
@@ -571,7 +605,8 @@ class CrearKMLView(APIView):
             kml.save(tmp.name)
             with open(tmp.name, 'rb') as f:
                 response = HttpResponse(f.read(), content_type='application/vnd.google-earth.kml+xml')
-                response['Content-Disposition'] = 'attachment; filename="Incendio.kml"'
+                nombre = amenaza.replace(' ', '_') or 'Riesgo'
+                response['Content-Disposition'] = f'attachment; filename="{nombre}.kml"'
                 return response
 
 
@@ -586,19 +621,13 @@ class CrearKMLDetalleView(APIView):
 
         timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
 
-        db_connection_url = (
-            "postgresql://"
-            + os.getenv('DATABASE_USER') + ":"
-            + os.getenv('DATABASE_PASSWORD') + "@"
-            + os.getenv('DATABASE_HOST') + ":"
-            + os.getenv('DATABASE_PORT') + "/"
-            + os.getenv('DATABASE_NAME')
-        )
-        con = create_engine(db_connection_url)
+        con = _engine()
+        amenaza_id = amenaza_id_de(request, AMENAZA_POR_DEFECTO)
+        amenaza = nombre_amenaza(amenaza_id)
 
-        sql = """
+        sql = f"""
         SELECT id, geom, direccion, rol_sii, manzana, predio, detalle_riesgo
-        FROM detalle_calculo_incendio
+        FROM postgisftw.detalle_calculo({int(amenaza_id)})
         """
 
         gdf = gpd.read_postgis(sql, con, geom_col='geom')
@@ -608,8 +637,7 @@ class CrearKMLDetalleView(APIView):
             if indice <= 1.75:   return '#00FF00'
             elif indice <= 2.5:  return '#FFFF00'
             elif indice <= 3.25: return '#FFA500'
-            elif indice <= 4.76: return '#FF0000'
-            else:                return '#FFFFFF'
+            else:                return '#FF0000'
 
         def get_nivel(indice):
             if indice <= 1.75:   return 'Bajo'
@@ -631,7 +659,7 @@ class CrearKMLDetalleView(APIView):
             }.get(hex_color, '#374151')
 
         kml = simplekml.Kml()
-        kml.document.name = 'Riesgo de Incendio'
+        kml.document.name = f'Riesgo de {amenaza}'
         kml.document.description = f'Datos actualizados por ultima vez {timestamp}'
 
         for _, row in gdf.iterrows():
@@ -645,7 +673,7 @@ class CrearKMLDetalleView(APIView):
             hex_color = get_color(total_riesgo)
             kml_color = hex_to_kml_color(hex_color)
             nivel = get_nivel(total_riesgo)
-            fill_pct = min(round(total_riesgo / 4.76 * 100), 100)
+            fill_pct = min(round(total_riesgo / RIESGO_MAX * 100), 100)
             value_color = get_value_color(hex_color)
 
             # Pick header text colors based on background luminance
@@ -672,7 +700,7 @@ class CrearKMLDetalleView(APIView):
             description = (
                 f'<div style="font-family:Arial,sans-serif;width:250px;height:300px;box-sizing:border-box;overflow:hidden;">'
                 f'<div style="background:{hex_color};padding:8px 10px;">'
-                f'<div style="font-size:9px;color:{text_color_dim};text-transform:uppercase;letter-spacing:1px;">Riesgo de Incendio</div>'
+                f'<div style="font-size:9px;color:{text_color_dim};text-transform:uppercase;letter-spacing:1px;">Riesgo de {amenaza}</div>'
                 f'<div style="font-size:13px;font-weight:bold;color:{text_color};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{row["direccion"]}</div>'
                 f'<div style="font-size:10px;color:{text_color_dim};margin-top:1px;">Rol SII: {row["rol_sii"]}</div>'
                 f'<div style="display:inline-block;background:{badge_bg};color:{text_color};padding:1px 8px;border-radius:8px;font-size:10px;margin-top:4px;">{nivel}</div>'
@@ -680,7 +708,7 @@ class CrearKMLDetalleView(APIView):
                 f'<div style="background:#fafafa;padding:8px 10px;border:1px solid #e0e0e0;border-top:none;">'
                 f'<table style="width:100%;margin-bottom:6px;"><tr>'
                 f'<td style="font-size:10px;color:#555;">Índice de Riesgo Total</td>'
-                f'<td style="font-size:14px;font-weight:bold;text-align:right;color:{value_color};">{round(total_riesgo,2)}<span style="font-size:10px;color:#999;"> / 4.76</span></td>'
+                f'<td style="font-size:14px;font-weight:bold;text-align:right;color:{value_color};">{round(total_riesgo,2)}<span style="font-size:10px;color:#999;"> / {RIESGO_MAX}</span></td>'
                 f'</tr></table>'
                 f'<div style="background:#e0e0e0;border-radius:3px;height:6px;margin-bottom:8px;">'
                 f'<div style="background:{hex_color};width:{fill_pct}%;height:6px;border-radius:3px;"></div></div>'
@@ -714,7 +742,8 @@ class CrearKMLDetalleView(APIView):
             kml.save(tmp.name)
             with open(tmp.name, 'rb') as f:
                 response = HttpResponse(f.read(), content_type='application/vnd.google-earth.kml+xml')
-                response['Content-Disposition'] = 'attachment; filename="Incendio_Detalle.kml"'
+                nombre = amenaza.replace(' ', '_') or 'Riesgo'
+                response['Content-Disposition'] = f'attachment; filename="{nombre}_Detalle.kml"'
                 return response
 
 
