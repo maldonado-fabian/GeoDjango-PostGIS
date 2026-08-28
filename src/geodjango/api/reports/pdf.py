@@ -229,6 +229,16 @@ def _conteo_amenaza(amenaza_id, total):
 # ── documento ────────────────────────────────────────────────────────────────
 def generar_pdf_resumen(amenaza_id):
     """Genera el PDF (bytes) del resumen global, con detalle de `amenaza_id`."""
+    try:
+        return _generar_pdf_resumen(amenaza_id)
+    finally:
+        # La caché de teselas es estado de módulo y el worker de Celery es de
+        # larga vida: sin limpiarla, un informe sobre otra extensión reutilizaría
+        # las teselas del anterior.
+        charts.limpiar_cache()
+
+
+def _generar_pdf_resumen(amenaza_id):
     total = queries.total_inmuebles()
     df_amen = queries.amenazas()
     base_geo = queries.inmuebles_geo()
