@@ -1,4 +1,4 @@
-"""Tests de los cuatro análisis y del armado por secciones."""
+"""Tests del diagnóstico de factores y del armado por secciones."""
 
 import unittest
 
@@ -45,7 +45,7 @@ class DiagnosticoSinBase(SimpleTestCase):
             1: [4, 4, 4, 4, 4, 4],       # constante
             2: [1, 2, 3, 4, 1, 2],       # variable
         }))
-        constante = df[df['subindicador_nombre'] == 'sub1'].iloc[0]
+        constante = df[df['factor_nombre'] == 'sub1'].iloc[0]
         self.assertTrue(constante['sin_variacion'])
         self.assertEqual(constante['correlacion'], 0.0)
         self.assertEqual(constante['clasificacion'], analytics.SISTEMICO)
@@ -97,7 +97,7 @@ class AnalisisSobreDatosReales(SimpleTestCase):
     def test_plan_de_gestion_es_sistemico(self):
         """El hallazgo que motivó el rediseño: aporta mucho y no discrimina."""
         df = self.ctx.diagnostico
-        fila = df[df['subindicador_nombre'].str.contains('Plan de gestión', case=False)].iloc[0]
+        fila = df[df['factor_nombre'].str.contains('Plan de gestión', case=False)].iloc[0]
         self.assertGreater(fila['valor_medio'], 3.9)
         self.assertGreater(fila['pct_alto'], 95)
         self.assertLess(abs(fila['correlacion']), 0.4)
@@ -107,29 +107,28 @@ class AnalisisSobreDatosReales(SimpleTestCase):
         """El aporte es una descomposición del índice: debe cerrar en 100%."""
         self.assertAlmostEqual(self.ctx.diagnostico['aporte_pct'].sum(), 100.0, places=0)
 
-    def test_territorial_agrega_por_manzana(self):
-        df = self.ctx.territorial
-        self.assertGreater(len(df), 40)
-        self.assertTrue((df['pct_alto_mas'] <= 100).all())
-        self.assertTrue((df['n_alto_mas'] <= df['n_evaluados']).all())
+    def test_los_dos_niveles_reparten_el_mismo_indice(self):
+        """Agregar a indicador primario no puede cambiar el total repartido."""
+        por_indicador = self.ctx.diagnostico_indicadores
+        self.assertAlmostEqual(por_indicador['aporte_pct'].sum(), 100.0, places=0)
+        self.assertEqual(len(por_indicador), len(self.ctx.indicadores))
 
-    def test_criticos_estan_ordenados_y_nombrados(self):
-        df = self.ctx.criticos
-        self.assertEqual(len(df), self.ctx.cfg.top_criticos)
-        self.assertTrue(df['indice_de_riesgo'].is_monotonic_decreasing)
-        self.assertTrue(df['direccion'].notna().all())
-        self.assertTrue(df['factores'].notna().all())
+    def test_el_aporte_del_indicador_es_la_suma_de_sus_subindicadores(self):
+        sub = self.ctx.diagnostico.merge(
+            self.ctx.contribuciones[['subindicador_id', 'indicador_nombre']].drop_duplicates(),
+            left_on='factor_id', right_on='subindicador_id')
+        por_grupo = sub.groupby('indicador_nombre')['aporte_pct'].sum()
 
-    def test_cruce_reproduce_los_valores_conocidos(self):
-        cruce = self.ctx.cruce
-        self.assertIsNotNone(cruce)
-        self.assertEqual(cruce.attrs['n_ambas'], 351)
-        self.assertAlmostEqual(cruce.attrs['correlacion'], 0.462, places=2)
-        self.assertEqual(cruce.attrs['n_altos_en_ambas'], 37)
+        for _, fila in self.ctx.diagnostico_indicadores.iterrows():
+            self.assertAlmostEqual(
+                fila['aporte_pct'], por_grupo[fila['factor_nombre']], places=4,
+                msg=f"El aporte de «{fila['factor_nombre']}» no cuadra con sus sub-indicadores")
 
-    def test_la_matriz_cruzada_suma_los_inmuebles_comunes(self):
-        cruce = self.ctx.cruce
-        self.assertEqual(int(cruce.attrs['matriz'].values.sum()), cruce.attrs['n_ambas'])
+    def test_el_puntaje_del_indicador_queda_en_la_escala_1_4(self):
+        """Los pesos de los sub-indicadores suman 1 dentro de cada indicador."""
+        valores = self.ctx.diagnostico_indicadores['valor_medio']
+        self.assertGreaterEqual(valores.min(), 1.0)
+        self.assertLessEqual(valores.max(), 4.0)
 
 
 class RegistroDeSecciones(SimpleTestCase):
@@ -186,6 +185,6 @@ class GeneracionPorModo(SimpleTestCase):
         from api.reports import pdf
 
         datos = pdf.generar(config.ReportConfig(
-            amenaza_id=AMENAZA_SISMO, secciones=('portada', 'criticos'), incluir_indice=False))
+            amenaza_id=AMENAZA_SISMO, secciones=('portada', 'diagnostico_primarios'), incluir_indice=False))
         paginas = max(int(m) for m in re.findall(rb'/Count (\d+)', datos))
         self.assertLessEqual(paginas, 4)

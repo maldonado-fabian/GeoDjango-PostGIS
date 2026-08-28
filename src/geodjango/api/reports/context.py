@@ -78,10 +78,6 @@ class ReportContext:
     def geo(self):
         return queries.inmuebles_geo()
 
-    @cached_property
-    def geo_manzanas(self):
-        return queries.manzanas_geo()
-
     # ── evaluación ───────────────────────────────────────────────────────────
 
     def indice(self, amenaza_id=None):
@@ -121,52 +117,21 @@ class ReportContext:
 
     @cached_property
     def diagnostico(self):
-        return analytics.diagnostico(self.contribuciones, self.cfg.umbral_correlacion)
+        """Diagnóstico al nivel de los sub-indicadores."""
+        return analytics.diagnostico(
+            self.contribuciones, self.cfg.umbral_correlacion,
+            nivel=analytics.NIVEL_SUBINDICADOR)
 
     @cached_property
-    def territorial(self):
-        return analytics.territorial(self.indice(), self.meta)
-
-    @cached_property
-    def criticos(self):
-        return analytics.criticos(
-            self.contribuciones, self.meta, self.etiquetas_clase, top=self.cfg.top_criticos)
+    def diagnostico_indicadores(self):
+        """El mismo análisis agregado a los indicadores primarios."""
+        return analytics.diagnostico(
+            self.contribuciones, self.cfg.umbral_correlacion,
+            nivel=analytics.NIVEL_INDICADOR)
 
     @cached_property
     def distribucion(self):
         return analytics.resumen_distribucion(self.indice())
-
-    @cached_property
-    def amenaza_comparacion(self):
-        """Amenaza con la que cruzar, o `None` si no hay otra evaluada.
-
-        Si la configuración no la fija, se elige la que comparta más inmuebles
-        evaluados con la principal: es la que produce un cruce con sentido.
-        """
-        if self.cfg.amenaza_comparacion is not None:
-            fila = queries.amenaza(self.cfg.amenaza_comparacion)
-            return fila if fila and int(fila['id']) != self.amenaza_id else None
-
-        propios = set(self.indice()['id_inmueble'])
-        mejor, mejor_n = None, 0
-        for _, a in self.amenazas.iterrows():
-            otro_id = int(a['id'])
-            if otro_id == self.amenaza_id:
-                continue
-            comunes = len(propios & set(self.indice(otro_id)['id_inmueble']))
-            if comunes > mejor_n:
-                mejor, mejor_n = a.to_dict(), comunes
-        return mejor
-
-    @cached_property
-    def cruce(self):
-        otra = self.amenaza_comparacion
-        if otra is None:
-            return None
-        return analytics.cruce(
-            self.indice(), self.indice(int(otra['id'])), self.meta,
-            nombre_a=self.nombre_amenaza, nombre_b=otra['nombre'],
-        )
 
     # ── capacidades ──────────────────────────────────────────────────────────
 
@@ -178,12 +143,6 @@ class ReportContext:
         página vacía o reventar el worker.
         """
         caps = set()
-        if len(self.amenazas) > 1 and self.cruce is not None:
-            caps.add('multi_amenaza')
-        if not self.territorial.empty:
-            caps.add('territorial')
         if not self.diagnostico.empty:
             caps.add('diagnostico')
-        if not self.criticos.empty:
-            caps.add('criticos')
         return frozenset(caps)

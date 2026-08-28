@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
-from reportlab.platypus import Image, Paragraph, Table, TableStyle
+from reportlab.platypus import Image, KeepTogether, Paragraph, Table, TableStyle
 
 from . import niveles
 
@@ -23,6 +23,9 @@ SUBTITULO = ParagraphStyle('Subtitulo', parent=_ss['Title'], fontSize=12, leadin
                            textColor=colors.HexColor('#5b5f60'))
 H1 = ParagraphStyle('H1', parent=_ss['Heading1'], fontSize=14, spaceBefore=14, spaceAfter=6)
 H2 = ParagraphStyle('H2', parent=_ss['Heading2'], fontSize=11.5, spaceBefore=10, spaceAfter=4)
+#: Título de un bloque compacto. No entra al índice: H1 y H2 sí, H3 no, para que
+#: el índice no se llene con una entrada por cada indicador.
+H3 = ParagraphStyle('H3', parent=_ss['Heading3'], fontSize=9.5, spaceBefore=8, spaceAfter=3)
 BODY = ParagraphStyle('Body', parent=_ss['BodyText'], fontSize=9.5, leading=13, alignment=TA_JUSTIFY)
 CAPTION = ParagraphStyle('Caption', parent=_ss['BodyText'], fontSize=8.5, alignment=TA_CENTER,
                          textColor=colors.HexColor('#555555'), spaceBefore=4, spaceAfter=10)
@@ -83,6 +86,45 @@ def figura_compuesta(map_png, tabla_flow, donut_png):
         ('ALIGN', (1, 0), (1, -1), 'CENTER'),
     ]))
     return t
+
+
+#: Ancho del mapa en la figura compacta, como fracción del ancho útil.
+_COMPACTA_MAPA = 0.40
+_COMPACTA_DONA = 0.30
+_COMPACTA_TABLA = 0.26
+
+
+def figura_compacta(titulo, map_png, tabla_flow, donut_png, pie):
+    """Bloque de media página: mapa · tabla · dona en una sola fila.
+
+    Dos de estos caben en una página. La versión de página completa apila la
+    tabla sobre la dona a la derecha del mapa; aquí los tres van en línea, lo
+    que baja la altura a poco más de un tercio de la página.
+
+    Devuelve un `KeepTogether` para que el bloque nunca se parta entre páginas.
+    """
+    fila = Table(
+        [[imagen(map_png, USABLE_W * _COMPACTA_MAPA),
+          tabla_flow,
+          imagen(donut_png, USABLE_W * _COMPACTA_DONA)]],
+        colWidths=[USABLE_W * _COMPACTA_MAPA + 0.15 * cm,
+                   USABLE_W * _COMPACTA_TABLA + 0.15 * cm,
+                   USABLE_W * _COMPACTA_DONA],
+    )
+    fila.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    return KeepTogether([Paragraph(titulo, H3), fila, Paragraph(pie, CAPTION)])
+
+
+def ancho_tabla_compacta():
+    """Ancho que debe pedir la tabla resumen dentro de una figura compacta."""
+    return USABLE_W * _COMPACTA_TABLA
 
 
 def grid_donas(donut_pngs, columnas=2):

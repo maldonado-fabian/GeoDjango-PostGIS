@@ -28,13 +28,6 @@ class ReportConfig:
     secciones: tuple = None
     excluir: tuple = ()
 
-    #: Amenaza contra la que comparar en la sección multi-amenaza. `None` elige
-    #: automáticamente la que comparta más inmuebles evaluados con la principal.
-    amenaza_comparacion: int = None
-
-    top_criticos: int = 25
-    top_manzanas: int = 10
-
     #: Correlación desde la cual un sub-indicador se considera diferenciador.
     umbral_correlacion: float = 0.40
 
@@ -43,15 +36,12 @@ class ReportConfig:
     basemap: bool = True
     incluir_indice: bool = True
 
-    #: Advertencia de distribución en la portada. La sección de inmuebles
-    #: críticos publica direcciones y roles SII de los predios más vulnerables.
-    restringido: bool = True
+    #: Advertencia de distribución en la portada.
+    restringido: bool = False
 
     def __post_init__(self):
         if self.modo not in MODOS:
             raise ValueError(f'Modo desconocido: {self.modo!r}. Válidos: {", ".join(MODOS)}')
-        if self.top_criticos < 1:
-            raise ValueError('top_criticos debe ser al menos 1')
 
     @property
     def es_completo(self):

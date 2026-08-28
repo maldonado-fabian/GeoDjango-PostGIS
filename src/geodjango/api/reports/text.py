@@ -152,17 +152,16 @@ def parrafo_resultados_amenaza(filas, total):
 
 def parrafo_indicadores_primarios():
     return (
-        "En cuanto a los resultados obtenidos para los indicadores primarios (<b>Figura 2</b>), "
-        "se observa la incidencia de cada uno en el resultado final, según el porcentaje de "
-        "inmuebles con valores alto y muy alto que concentra cada indicador."
+        "Cada indicador primario se presenta con su espacialización, la distribución de "
+        "inmuebles por nivel y su promedio. Ver dónde se concentra cada indicador, y no sólo "
+        "cuánto suma, es lo que permite decidir en qué parte del sitio actuar sobre él."
     )
 
 
 def parrafo_indicadores_secundarios():
     return (
-        "A continuación se detalla la incidencia de cada indicador secundario en los resultados. "
-        "Para cada uno se presenta su espacialización, la distribución de inmuebles por nivel y "
-        "el promedio obtenido."
+        "El mismo detalle, al nivel de indicador secundario: es la granularidad a la que se "
+        "define la obra concreta sobre cada inmueble."
     )
 
 
@@ -222,7 +221,7 @@ def hallazgos(ctx):
             salida.append({
                 'titulo': f"El mayor aporte al riesgo es una carencia del sitio, no de los predios",
                 'cuerpo': (
-                    f"'{top['subindicador_nombre']}' explica el {_num(top['aporte_pct'], 1)}% del índice, "
+                    f"'{top['factor_nombre']}' explica el {_num(top['aporte_pct'], 1)}% del índice, "
                     f"pero {top['pct_alto']:.0f}% de los inmuebles puntúa en el rango alto y su "
                     f"correlación con el resto del índice es de sólo {_num(top['correlacion'])}: "
                     f"prácticamente todos los inmuebles están igual de mal. "
@@ -234,7 +233,7 @@ def hallazgos(ctx):
                 ),
             })
         if not diferenciadores.empty:
-            nombres = ', '.join(f"'{n}'" for n in diferenciadores['subindicador_nombre'].head(3))
+            nombres = ', '.join(f"'{n}'" for n in diferenciadores['factor_nombre'].head(3))
             salida.append({
                 'titulo': f"{len(diferenciadores)} factores sí distinguen unos inmuebles de otros",
                 'cuerpo': (
@@ -248,46 +247,24 @@ def hallazgos(ctx):
                 ),
             })
 
-    # 3. Concentración territorial
-    terr = ctx.territorial
-    if not terr.empty:
-        criticas = terr[terr['pct_alto_mas'] >= 100]
-        if not criticas.empty:
-            inmuebles_afectados = int(criticas['n_evaluados'].sum())
-            salida.append({
-                'titulo': f"{len(criticas)} manzanas tienen el 100% de sus inmuebles en riesgo alto",
-                'cuerpo': (
-                    f"Concentran {inmuebles_afectados} inmuebles. La manzana "
-                    f"{criticas.iloc[0]['manzana']} encabeza la lista con un índice medio de "
-                    f"{_num(criticas.iloc[0]['indice_medio'])}."
-                ),
-                'implicancia': (
-                    'La manzana es una unidad de intervención más eficiente que el predio: '
-                    'permite actuar sobre el contagio entre inmuebles contiguos.'
-                ),
-            })
-
-    # 4. Multi-amenaza
-    cruce = ctx.cruce
-    if cruce is not None and cruce.attrs['n_altos_en_ambas']:
-        r = cruce.attrs['correlacion']
+    # 3. El indicador primario que más pesa
+    diag_ind = ctx.diagnostico_indicadores
+    if not diag_ind.empty:
+        top = diag_ind.iloc[0]
         salida.append({
-            'titulo': (
-                f"{cruce.attrs['n_altos_en_ambas']} inmuebles acumulan riesgo alto en "
-                f"{cruce.attrs['nombre_a'].lower()} y {cruce.attrs['nombre_b'].lower()}"
-            ),
+            'titulo': f"'{top['factor_nombre']}' concentra el {_num(top['aporte_pct'], 1)}% del índice",
             'cuerpo': (
-                f"La correlación entre ambos índices es de {_num(r)}: las dos amenazas afectan en "
-                f"parte a los mismos inmuebles, pero no son el mismo problema. Reducir una no "
-                f"reduce automáticamente la otra."
+                f"Es el indicador primario de mayor peso en el resultado, con un puntaje medio "
+                f"de {_num(top['valor_medio'])} sobre 4 y una correlación de "
+                f"{_num(top['correlacion'])} con el resto del índice."
             ),
             'implicancia': (
-                'Estos inmuebles deben encabezar cualquier priorización: una sola intervención '
-                'sobre ellos reduce exposición frente a dos amenazas.'
+                'Es el nivel al que conviene formular el programa de intervención; el detalle '
+                'por indicador secundario define después la obra concreta.'
             ),
         })
 
-    # 5. Cobertura del dato
+    # 4. Cobertura del dato
     if dist and dist['n'] < ctx.total_inmuebles:
         sin_evaluar = ctx.total_inmuebles - dist['n']
         salida.append({
@@ -374,6 +351,13 @@ def intro_diagnostico():
     )
 
 
+def intro_diagnostico_secundarios():
+    return (
+        "El mismo análisis, desagregado a los indicadores secundarios. El nivel primario dice "
+        "sobre qué formular el programa; este dice qué medida concreta lo materializa."
+    )
+
+
 def parrafo_diagnostico(df):
     from .analytics import DIFERENCIADOR, SISTEMICO
 
@@ -410,84 +394,6 @@ def nota_metodo_diagnostico():
     )
 
 
-# ── Territorial ──────────────────────────────────────────────────────────────
-
-def parrafo_territorial(df, ctx):
-    criticas = df[df['pct_alto_mas'] >= 100]
-    total_mz = len(df)
-    if criticas.empty:
-        return (
-            f"El sitio se organiza en {total_mz} manzanas con al menos un inmueble evaluado. "
-            f"Ninguna concentra la totalidad de sus inmuebles en riesgo alto o muy alto."
-        )
-    return (
-        f"El sitio se organiza en {total_mz} manzanas con al menos un inmueble evaluado. "
-        f"{len(criticas)} de ellas tienen la totalidad de sus inmuebles en riesgo alto o muy "
-        f"alto, agrupando {int(criticas['n_evaluados'].sum())} predios. Intervenir por manzana, "
-        f"y no predio a predio, permite además actuar sobre el contagio entre inmuebles "
-        f"contiguos, que es un mecanismo que la evaluación individual no captura."
-    )
-
-
-# ── Inmuebles críticos ───────────────────────────────────────────────────────
-
-def parrafo_criticos(df, ctx, n):
-    if df.empty:
-        return "No hay inmuebles evaluados para esta amenaza."
-    peor = df.iloc[0]
-    return (
-        f"Los {min(n, len(df))} inmuebles de mayor índice frente a la amenaza "
-        f"{ctx.nombre_amenaza.lower()}, con los factores que más aportan a su puntaje. "
-        f"Encabeza la lista {peor['direccion']} (rol {peor['rol_sii']}), con un índice de "
-        f"{_num(peor['indice_de_riesgo'])}. La columna de factores indica sobre qué actuar en "
-        f"cada caso: no todos los inmuebles de la lista tienen el mismo problema."
-    )
-
-
-def nota_criticos():
-    return (
-        "Este listado identifica inmuebles y su condición de vulnerabilidad. Se entrega para "
-        "priorizar la acción pública y su circulación debe restringirse a ese uso."
-    )
-
-
-def parrafo_anexo_altos(n, ctx):
-    return (
-        f"Los {n} inmuebles con índice de riesgo alto o muy alto frente a la amenaza "
-        f"{ctx.nombre_amenaza.lower()}, ordenados de mayor a menor."
-    )
-
-
-# ── Multi-amenaza ────────────────────────────────────────────────────────────
-
-def parrafo_multiamenaza(df):
-    a = df.attrs['nombre_a']
-    b = df.attrs['nombre_b']
-    r = df.attrs['correlacion']
-    n_ambas = df.attrs['n_ambas']
-    n_altos = df.attrs['n_altos_en_ambas']
-
-    if r != r:  # NaN
-        relacion = "No hay suficientes inmuebles evaluados en ambas amenazas para estimar su relación"
-    elif r >= 0.7:
-        relacion = (f"Los índices están fuertemente correlacionados (r = {_num(r)}): en buena "
-                    f"medida afectan a los mismos inmuebles")
-    elif r >= 0.3:
-        relacion = (f"Los índices están moderadamente correlacionados (r = {_num(r)}): las dos "
-                    f"amenazas afectan en parte a los mismos inmuebles, pero no son el mismo "
-                    f"problema y reducir una no reduce automáticamente la otra")
-    else:
-        relacion = (f"Los índices apenas se relacionan (r = {_num(r)}): son problemas "
-                    f"independientes y exigen estrategias separadas")
-
-    return (
-        f"{n_ambas} inmuebles cuentan con evaluación para {a.lower()} y {b.lower()}. "
-        f"{relacion}. {n_altos} inmuebles alcanzan riesgo alto o muy alto en ambas amenazas "
-        f"simultáneamente: son los que deberían encabezar cualquier priorización, porque una "
-        f"sola intervención sobre ellos reduce exposición frente a dos amenazas."
-    )
-
-
 # ── Acciones ─────────────────────────────────────────────────────────────────
 
 def acciones(ctx):
@@ -500,7 +406,7 @@ def acciones(ctx):
     if not diag.empty:
         sistemicos = diag[diag['clasificacion'] == SISTEMICO]
         if not sistemicos.empty:
-            nombres = ', '.join(f"'{n}'" for n in sistemicos['subindicador_nombre'].head(3))
+            nombres = ', '.join(f"'{n}'" for n in sistemicos['factor_nombre'].head(3))
             salida.append(
                 f"Abordar de forma programática los déficits sistémicos ({nombres} y otros "
                 f"{max(len(sistemicos) - 3, 0)}). Al afectar a casi todos los inmuebles por igual, "
@@ -508,27 +414,20 @@ def acciones(ctx):
             )
         diferenciadores = diag[diag['clasificacion'] == DIFERENCIADOR]
         if not diferenciadores.empty:
+            nombres = ', '.join(f"'{n}'" for n in diferenciadores['factor_nombre'].head(3))
             salida.append(
                 f"Focalizar la intervención física en los {len(diferenciadores)} factores "
-                f"diferenciadores, usando el listado de inmuebles críticos para decidir el orden."
+                f"diferenciadores ({nombres}), que son los que separan unos inmuebles de otros "
+                f"y donde la obra predio a predio sí cambia el resultado."
             )
 
-    terr = ctx.territorial
-    if not terr.empty:
-        criticas = terr[terr['pct_alto_mas'] >= 100].head(5)
-        if not criticas.empty:
-            nombres = ', '.join(str(m) for m in criticas['manzana'])
-            salida.append(
-                f"Priorizar territorialmente las manzanas {nombres}, donde la totalidad de los "
-                f"inmuebles evaluados está en riesgo alto o muy alto."
-            )
-
-    cruce = ctx.cruce
-    if cruce is not None and cruce.attrs['n_altos_en_ambas']:
+    diag_ind = ctx.diagnostico_indicadores
+    if not diag_ind.empty:
+        top = diag_ind.iloc[0]
         salida.append(
-            f"Anteponer los {cruce.attrs['n_altos_en_ambas']} inmuebles con riesgo alto en "
-            f"{cruce.attrs['nombre_a'].lower()} y {cruce.attrs['nombre_b'].lower()} a la vez, "
-            f"por su exposición acumulada."
+            f"Formular el programa a nivel del indicador primario '{top['factor_nombre']}', que "
+            f"concentra el {_num(top['aporte_pct'], 1)}% del índice, y usar la espacialización "
+            f"por indicador para decidir dónde empezar."
         )
 
     dist = ctx.distribucion

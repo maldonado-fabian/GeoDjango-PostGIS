@@ -82,11 +82,7 @@ def total_inmuebles():
 
 
 def inmuebles_meta():
-    """Atributos de identificación de cada inmueble, sin geometría.
-
-    Alimenta las tablas nombradas (inmuebles críticos) y la agregación por
-    manzana, que hoy el informe no produce.
-    """
+    """Atributos de identificación de cada inmueble, sin geometría."""
     return _leer("""
         SELECT id AS id_inmueble, manzana, predio, rol_sii, direccion
         FROM inmuebles
@@ -101,25 +97,6 @@ def inmuebles_geo():
     figura, para colorear el mapa.
     """
     sql = "SELECT id AS id_inmueble, geom FROM inmuebles WHERE geom IS NOT NULL"
-    with _engine().connect() as con:
-        gdf = gpd.read_postgis(sql, con, geom_col="geom")
-    if gdf.crs is None:
-        gdf = gdf.set_crs(epsg=4326)
-    return gdf.to_crs(epsg=3857)
-
-
-def manzanas_geo():
-    """GeoDataFrame de manzanas (unión de sus inmuebles) en EPSG:3857.
-
-    Unidad de gestión territorial: 53 manzanas de ~12 inmuebles frente a 369
-    predios sueltos.
-    """
-    sql = """
-        SELECT manzana, COUNT(*) AS n_inmuebles, ST_Multi(ST_Union(geom)) AS geom
-        FROM inmuebles
-        WHERE manzana IS NOT NULL AND geom IS NOT NULL
-        GROUP BY manzana
-    """
     with _engine().connect() as con:
         gdf = gpd.read_postgis(sql, con, geom_col="geom")
     if gdf.crs is None:

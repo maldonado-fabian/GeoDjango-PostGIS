@@ -1,11 +1,17 @@
-"""Secciones de la amenaza evaluada: resultado global, indicadores, sub-indicadores."""
+"""Secciones de la amenaza evaluada: resultado global, indicadores, sub-indicadores.
 
-from reportlab.platypus import PageBreak, Paragraph
+Los indicadores primarios y secundarios se presentan con el mismo bloque:
+mapa · tabla resumen · dona, en una sola fila, de modo que caben dos por página.
+Antes los primarios sólo tenían dona -sin mapa- y cada secundario ocupaba una
+página entera.
+"""
+
+from reportlab.platypus import Paragraph
 
 from .. import charts, niveles, tables, text
 from ..config import MODO_COMPLETO
-from ..styles import (BODY, CAPTION, H1, H2,
-                      figura_compuesta, gdf_coloreado, grid_donas)
+from ..styles import (BODY, CAPTION, H1, H2, ancho_tabla_compacta,
+                      figura_compacta, figura_compuesta, gdf_coloreado)
 from . import seccion
 
 
@@ -15,7 +21,7 @@ def _p(txt, estilo=BODY):
 
 #: Largo máximo de una etiqueta de clase en la leyenda de un mapa. Por encima
 #: de esto el recuadro se come la figura.
-MAX_ETIQUETA = 34
+MAX_ETIQUETA = 28
 
 
 def etiqueta_clase(etiquetas, subindicador_id, valor):
@@ -28,8 +34,21 @@ def etiqueta_clase(etiquetas, subindicador_id, valor):
     return f'{valor} · {nombre}'
 
 
+def _bloque(ctx, cfg, *, titulo, gdf, leyenda, filas, etiqueta_leyenda, pie):
+    """Bloque compacto de media página: mapa · tabla · dona."""
+    mapa_png = charts.mapa(gdf, titulo, leyenda, etiqueta_leyenda=etiqueta_leyenda,
+                           dpi=cfg.dpi_mapa, basemap=cfg.basemap,
+                           compacto=True, sin_titulo=True)
+    dona_png = charts.donut(filas, titulo, dpi=cfg.dpi_dona,
+                            compacto=True, sin_titulo=True)
+    tabla = tables.evaluacion(filas, ctx.total_inmuebles, titulo='DISTRIBUCIÓN',
+                              ancho=ancho_tabla_compacta())
+    return figura_compacta(titulo, mapa_png, tabla, dona_png, pie)
+
+
 @seccion('amenaza_detalle', 'Resultado de la amenaza', 400)
 def amenaza_detalle(ctx, cfg):
+    """Resultado global, a página completa: es la figura de referencia."""
     total = ctx.total_inmuebles
     filas = ctx.filas_nivel()
     idx = ctx.indice().copy()
@@ -57,35 +76,44 @@ def amenaza_detalle(ctx, cfg):
 
 @seccion('indicadores', 'Indicadores primarios', 900)
 def indicadores(ctx, cfg):
+    """Un bloque por indicador primario, con mapa. Dos por página."""
     total = ctx.total_inmuebles
-    donas = []
+    partes = [
+        _p('Espacialización de los indicadores primarios', H1),
+        _p(text.parrafo_indicadores_primarios(), BODY),
+    ]
+
+    leyenda = [(n, niveles.color(n)) for n in niveles.NIVELES]
+
     for _, g in ctx.indicador_scores.groupby('indicador_id', sort=True):
         nombre = g['indicador_nombre'].iloc[0]
         nivs = [niveles.nivel_por_indice(v) for v in g['score']]
-        donas.append(charts.donut(niveles.conteo(nivs, total),
-                                  f'{nombre.upper()} Nº; % DE EDIFICIOS', dpi=cfg.dpi_dona))
-    return [
-        _p('Incidencia de los indicadores primarios', H2),
-        _p(text.parrafo_indicadores_primarios(), BODY),
-        grid_donas(donas),
-        _p(f'Figura {ctx.figura.siguiente()}. Resultados de los indicadores primarios.', CAPTION),
-    ]
+        filas = niveles.conteo(nivs, total)
+
+        gv = g[['id_inmueble', 'score']].copy()
+        gv['nivel'] = gv['score'].map(niveles.nivel_por_indice)
+        gdf = gdf_coloreado(ctx.geo, gv[['id_inmueble', 'nivel']])
+
+        promedio = float(g['score'].mean()) if len(g) else 0.0
+        partes.append(_bloque(
+            ctx, cfg, titulo=nombre, gdf=gdf, leyenda=leyenda, filas=filas,
+            etiqueta_leyenda='NIVEL',
+            pie=(f'Figura {ctx.figura.siguiente()}. Indicador primario «{nombre}» · '
+                 f'promedio {promedio:.2f}'.replace('.', ',')),
+        ))
+    return partes
 
 
-@seccion('subindicadores', 'Indicadores secundarios', 1000)
+@seccion('subindicadores', 'Indicadores secundarios', 1000, modos=(MODO_COMPLETO,))
 def subindicadores(ctx, cfg):
-    """Tabla comparativa en modo ejecutivo; una página por sub-indicador en completo.
+    """Un bloque por sub-indicador, dos por página.
 
-    Las veinte páginas por sub-indicador eran el grueso del informe anterior.
-    En la versión ejecutiva se condensan en la tabla del diagnóstico, y aquí
-    quedan sólo si el lector pidió el detalle.
+    Antes cada uno ocupaba una página entera: veinte páginas de las veintiséis
+    del informe original.
     """
-    if cfg.modo != MODO_COMPLETO:
-        return []
-
     total = ctx.total_inmuebles
     partes = [
-        _p('Incidencia de los indicadores secundarios', H2),
+        _p('Espacialización de los indicadores secundarios', H1),
         _p(text.parrafo_indicadores_secundarios(), BODY),
     ]
 
@@ -104,17 +132,10 @@ def subindicadores(ctx, cfg):
              niveles.color(niveles.nivel_por_valor_crudo(v)))
             for v in (1, 2, 3, 4)
         ]
-        mapa_png = charts.mapa(gdf, nombre, leyenda, etiqueta_leyenda=nombre.upper(),
-                               dpi=cfg.dpi_mapa, basemap=cfg.basemap)
-        dona_png = charts.donut(filas, f'{nombre.upper()} Nº; % DE EDIFICIOS', dpi=cfg.dpi_dona)
-
-        partes += [
-            PageBreak(),
-            _p(f'Indicador secundario: {nombre}', H2),
-            _p(text.parrafo_subindicador(nombre, promedio,
-                                         niveles.nivel_por_indice(promedio)), BODY),
-            figura_compuesta(mapa_png, tables.evaluacion(filas, total, nombre.upper()), dona_png),
-            _p(f'Figura {ctx.figura.siguiente()}. Resultado del indicador secundario '
-               f'«{nombre}».', CAPTION),
-        ]
+        partes.append(_bloque(
+            ctx, cfg, titulo=nombre, gdf=gdf, leyenda=leyenda, filas=filas,
+            etiqueta_leyenda='CLASE',
+            pie=(f'Figura {ctx.figura.siguiente()}. Indicador secundario «{nombre}» · '
+                 f'promedio {promedio:.2f}'.replace('.', ',')),
+        ))
     return partes

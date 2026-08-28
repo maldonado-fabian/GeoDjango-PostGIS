@@ -95,10 +95,6 @@ def globales(ctx, cfg):
 
     if ctx.distribucion:
         series = {ctx.nombre_amenaza: ctx.indice()['indice_de_riesgo']}
-        otra = ctx.amenaza_comparacion
-        if otra is not None:
-            series[otra['nombre']] = ctx.indice(int(otra['id']))['indice_de_riesgo']
-
         partes += [
             Spacer(1, 0.35 * cm),
             _p('Distribución del índice', H2),

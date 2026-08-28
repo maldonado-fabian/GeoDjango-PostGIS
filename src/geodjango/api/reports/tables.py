@@ -150,32 +150,45 @@ def distribucion(resumen, nombre_amenaza):
     return t
 
 
-def diagnostico(df, compacta=False):
-    """Sub-indicadores ordenados por aporte, con su clasificación.
+def diagnostico(df, etiqueta='SUB-INDICADOR'):
+    """Factores ordenados por aporte, con su clasificación.
 
     El número de la primera columna es la clave con la dispersión: allí los
-    puntos van numerados porque veinte nombres no caben.
+    puntos van numerados porque veinte nombres no caben en el gráfico.
+
+    En el nivel de indicador primario la columna de grupo queda vacía y se
+    omite, porque un indicador no pertenece a otro.
     """
-    data = [['Nº', 'SUB-INDICADOR', 'INDICADOR', 'MEDIA', 'APORTE', 'CORR.', '% ALTO', 'CLASIFICACIÓN']]
+    con_grupo = df['grupo'].astype(str).str.strip().ne('').any()
+
+    cabecera = ['Nº', etiqueta]
+    if con_grupo:
+        cabecera.append('INDICADOR')
+    cabecera += ['MEDIA', 'APORTE', 'CORR.', '% ALTO', 'CLASIFICACIÓN']
+    data = [cabecera]
+
     estilos = _base(fontsize=6.5)
-    estilos.append(('ALIGN', (1, 1), (2, -1), 'LEFT'))
+    estilos.append(('ALIGN', (1, 1), (2 if con_grupo else 1, -1), 'LEFT'))
+    col_corr = 5 if con_grupo else 4
 
     for i, (_, fila) in enumerate(df.iterrows(), start=1):
-        corr = '—' if fila['sin_variacion'] else _num(fila['correlacion'])
-        data.append([
-            str(i),
-            styles.parrafo_celda(fila['subindicador_nombre'], CELDA),
-            styles.parrafo_celda(fila['indicador_nombre'], CELDA),
+        celdas = [str(i), styles.parrafo_celda(fila['factor_nombre'], CELDA)]
+        if con_grupo:
+            celdas.append(styles.parrafo_celda(fila['grupo'], CELDA))
+        celdas += [
             _num(fila['valor_medio']),
             f"{_num(fila['aporte_pct'], 1)}%",
-            corr,
+            '—' if fila['sin_variacion'] else _num(fila['correlacion']),
             f"{fila['pct_alto']:.0f}%",
             fila['clasificacion'],
-        ])
+        ]
+        data.append(celdas)
         if fila['sin_variacion']:
-            estilos.append(('TEXTCOLOR', (5, i), (5, i), styles.colors.HexColor('#c20000')))
+            estilos.append(('TEXTCOLOR', (col_corr, i), (col_corr, i),
+                            styles.colors.HexColor('#c20000')))
 
-    anchos = [0.04, 0.26, 0.19, 0.08, 0.09, 0.08, 0.09, 0.17]
+    anchos = ([0.04, 0.26, 0.19, 0.08, 0.09, 0.08, 0.09, 0.17] if con_grupo
+              else [0.05, 0.36, 0.10, 0.11, 0.10, 0.10, 0.18])
     t = Table(data, colWidths=[USABLE_W * a for a in anchos], repeatRows=1)
     t.setStyle(TableStyle(estilos))
     return t
@@ -191,7 +204,7 @@ def clasificacion_resumen(df, descripciones):
         subset = df[df['clasificacion'] == clase]
         if subset.empty:
             continue
-        nombres = ', '.join(subset['subindicador_nombre'])
+        nombres = ', '.join(subset['factor_nombre'])
         data.append([
             styles.parrafo_celda(f'<b>{clase}</b> ({len(subset)})', CELDA),
             styles.parrafo_celda(descripciones[clase], CELDA),
@@ -199,89 +212,6 @@ def clasificacion_resumen(df, descripciones):
         ])
 
     t = Table(data, colWidths=[USABLE_W * 0.15, USABLE_W * 0.42, USABLE_W * 0.43], repeatRows=1)
-    t.setStyle(TableStyle(estilos))
-    return t
-
-
-def manzanas(df, n=10):
-    """Manzanas ordenadas por proporción de inmuebles en riesgo alto."""
-    data = [['MANZANA', 'INMUEBLES', 'ÍNDICE MEDIO', 'MÁXIMO', 'ALTO O MUY ALTO', '%']]
-    estilos = _base(fontsize=7)
-    for i, (_, fila) in enumerate(df.head(n).iterrows(), start=1):
-        data.append([
-            str(fila['manzana']), str(int(fila['n_evaluados'])),
-            _num(fila['indice_medio']), _num(fila['indice_max']),
-            str(int(fila['n_alto_mas'])), f"{fila['pct_alto_mas']:.0f}%",
-        ])
-        nivel = fila['nivel_medio']
-        estilos += [
-            ('BACKGROUND', (2, i), (2, i), styles.color_celda(nivel)),
-            ('TEXTCOLOR', (2, i), (2, i), styles.texto_contraste(nivel)),
-        ]
-    anchos = [0.14, 0.14, 0.20, 0.14, 0.24, 0.14]
-    t = Table(data, colWidths=[USABLE_W * a for a in anchos], repeatRows=1)
-    t.setStyle(TableStyle(estilos))
-    return t
-
-
-def criticos(df, n=25):
-    """Inmuebles de mayor riesgo, nombrados, con los factores que los penalizan."""
-    data = [['Nº', 'DIRECCIÓN', 'ROL SII', 'MZ', 'ÍNDICE', 'FACTORES QUE MÁS APORTAN']]
-    estilos = _base(fontsize=6.5)
-    estilos.append(('ALIGN', (1, 1), (3, -1), 'LEFT'))
-    estilos.append(('ALIGN', (5, 1), (5, -1), 'LEFT'))
-
-    for i, (_, fila) in enumerate(df.head(n).iterrows(), start=1):
-        data.append([
-            str(i),
-            styles.parrafo_celda(fila['direccion'] or '—', CELDA),
-            styles.parrafo_celda(fila['rol_sii'] or '—', CELDA),
-            str(fila['manzana'] or '—'),
-            _num(fila['indice_de_riesgo']),
-            styles.parrafo_celda(fila['factores'] or '—', CELDA),
-        ])
-        nivel = fila['nivel']
-        estilos += [
-            ('BACKGROUND', (4, i), (4, i), styles.color_celda(nivel)),
-            ('TEXTCOLOR', (4, i), (4, i), styles.texto_contraste(nivel)),
-            ('FONTNAME', (4, i), (4, i), 'Helvetica-Bold'),
-        ]
-
-    anchos = [0.04, 0.22, 0.12, 0.07, 0.08, 0.47]
-    t = Table(data, colWidths=[USABLE_W * a for a in anchos], repeatRows=1)
-    t.setStyle(TableStyle(estilos))
-    return t
-
-
-def multi_amenaza(df, n=15):
-    """Inmuebles en riesgo alto en ambas amenazas."""
-    nombre_a = df.attrs['nombre_a']
-    nombre_b = df.attrs['nombre_b']
-    data = [['Nº', 'DIRECCIÓN', 'ROL SII', 'MZ', nombre_a.upper(), nombre_b.upper()]]
-    estilos = _base(fontsize=6.5)
-    estilos.append(('ALIGN', (1, 1), (3, -1), 'LEFT'))
-
-    altos = (niveles.NIVEL_ALTO, niveles.NIVEL_MUY_ALTO)
-    subset = df[df['nivel_a'].isin(altos) & df['nivel_b'].isin(altos)].head(n)
-
-    for i, (_, fila) in enumerate(subset.iterrows(), start=1):
-        data.append([
-            str(i),
-            styles.parrafo_celda(fila['direccion'] or '—', CELDA),
-            styles.parrafo_celda(fila['rol_sii'] or '—', CELDA),
-            str(fila['manzana'] or '—'),
-            _num(fila['indice_a']),
-            _num(fila['indice_b']),
-        ])
-        for col, nivel in ((4, fila['nivel_a']), (5, fila['nivel_b'])):
-            estilos += [
-                ('BACKGROUND', (col, i), (col, i), styles.color_celda(nivel)),
-                ('TEXTCOLOR', (col, i), (col, i), styles.texto_contraste(nivel)),
-                ('FONTNAME', (col, i), (col, i), 'Helvetica-Bold'),
-            ]
-
-    anchos = [0.05, 0.37, 0.16, 0.10, 0.16, 0.16]
-    t = Table(data, colWidths=[USABLE_W * a for a in anchos], repeatRows=1)
     t.setStyle(TableStyle(estilos))
     return t
 

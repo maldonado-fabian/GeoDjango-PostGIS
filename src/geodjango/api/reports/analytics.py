@@ -3,12 +3,8 @@
 Pandas puro: recibe DataFrames de `queries` y devuelve DataFrames. Sin SQL, sin
 matplotlib y sin ReportLab, para que cada análisis se pueda probar solo.
 
-Cuatro análisis, en orden de lo que aportan a una decisión:
-
-1. `diagnostico`  distingue déficits sistémicos de factores diferenciadores
-2. `territorial`  agrega por manzana, que es la unidad de gestión real
-3. `criticos`     nombra los inmuebles de mayor riesgo y por qué lo son
-4. `cruce`        cruza dos amenazas sobre los mismos inmuebles
+`diagnostico` distingue déficits sistémicos de factores diferenciadores, y se
+aplica tanto a los indicadores primarios como a sus sub-indicadores.
 """
 
 import numpy as np
@@ -38,15 +34,46 @@ DESCRIPCION_CLASIFICACION = {
 }
 
 
+#: Niveles a los que se puede aplicar el diagnóstico.
+NIVEL_INDICADOR = 'indicador'
+NIVEL_SUBINDICADOR = 'subindicador'
+
+_COLUMNAS = {
+    NIVEL_INDICADOR: ('indicador_id', 'indicador_nombre'),
+    NIVEL_SUBINDICADOR: ('subindicador_id', 'subindicador_nombre'),
+}
+
+
 def _indice_total(contribuciones):
     """Índice de riesgo por inmueble a partir de los aportes ponderados."""
     return contribuciones.groupby('id_inmueble')['contribucion'].sum()
 
 
-def diagnostico(contribuciones, umbral_correlacion=0.40):
+def _agregar_a_indicador(contribuciones):
+    """Colapsa los sub-indicadores en su indicador primario.
+
+    El aporte del indicador es la suma de los de sus sub-indicadores. El valor
+    representativo es la media ponderada de sus puntajes por el peso relativo
+    dentro del indicador, que es el puntaje del indicador en escala 1..4.
+    """
+    df = contribuciones.copy()
+    df['valor_ponderado'] = df['valor'] * df['peso_sub']
+    agregado = df.groupby(['id_inmueble', 'indicador_id', 'indicador_nombre'], as_index=False).agg(
+        contribucion=('contribucion', 'sum'),
+        valor=('valor_ponderado', 'sum'),
+        peso_ind=('peso_ind', 'first'),
+    )
+    agregado['peso_sub'] = 1.0
+    return agregado
+
+
+def diagnostico(contribuciones, umbral_correlacion=0.40, nivel=NIVEL_SUBINDICADOR):
     """Separa déficits sistémicos de factores diferenciadores.
 
-    Para cada sub-indicador calcula:
+    `nivel` elige la granularidad: los indicadores primarios o sus
+    sub-indicadores. El cálculo es el mismo; sólo cambia sobre qué se agrupa.
+
+    Para cada factor calcula:
 
     - `valor_medio`   promedio del puntaje crudo (1..4)
     - `aporte_pct`    cuánto del índice medio explica su aporte ponderado
@@ -64,25 +91,28 @@ def diagnostico(contribuciones, umbral_correlacion=0.40):
     sub-indicador separa unos inmuebles de otros y la intervención debe ser
     predio a predio.
     """
+    col_id, col_nombre = _COLUMNAS[nivel]
+
     if contribuciones.empty:
         return pd.DataFrame(columns=[
-            'subindicador_id', 'subindicador_nombre', 'indicador_nombre',
-            'valor_medio', 'aporte_medio', 'aporte_pct', 'correlacion',
-            'pct_alto', 'sin_variacion', 'clasificacion',
+            'factor_id', 'factor_nombre', 'grupo', 'valor_medio', 'aporte_medio',
+            'aporte_pct', 'correlacion', 'pct_alto', 'sin_variacion', 'clasificacion',
         ])
 
-    total = _indice_total(contribuciones)
+    datos = _agregar_a_indicador(contribuciones) if nivel == NIVEL_INDICADOR else contribuciones
+
+    total = _indice_total(datos)
     indice_medio = total.mean()
 
-    aporte = contribuciones.pivot_table(
-        index='id_inmueble', columns='subindicador_id', values='contribucion', aggfunc='sum')
-    valor = contribuciones.pivot_table(
-        index='id_inmueble', columns='subindicador_id', values='valor', aggfunc='mean')
+    aporte = datos.pivot_table(
+        index='id_inmueble', columns=col_id, values='contribucion', aggfunc='sum')
+    valor = datos.pivot_table(
+        index='id_inmueble', columns=col_id, values='valor', aggfunc='mean')
 
-    nombres = (contribuciones
-               .drop_duplicates('subindicador_id')
-               .set_index('subindicador_id')[['subindicador_nombre', 'indicador_nombre',
-                                              'peso_sub', 'peso_ind']])
+    columnas_meta = [col_nombre, 'peso_sub', 'peso_ind']
+    if nivel == NIVEL_SUBINDICADOR:
+        columnas_meta.insert(1, 'indicador_nombre')
+    nombres = datos.drop_duplicates(col_id).set_index(col_id)[columnas_meta]
 
     filas = []
     for sub_id in aporte.columns:
@@ -108,9 +138,10 @@ def diagnostico(contribuciones, umbral_correlacion=0.40):
 
         meta = nombres.loc[sub_id]
         filas.append({
-            'subindicador_id': int(sub_id),
-            'subindicador_nombre': meta['subindicador_nombre'],
-            'indicador_nombre': meta['indicador_nombre'],
+            'factor_id': int(sub_id),
+            'factor_nombre': meta[col_nombre],
+            # En el nivel de indicador el factor no pertenece a otro grupo.
+            'grupo': meta['indicador_nombre'] if nivel == NIVEL_SUBINDICADOR else '',
             'peso_sub': float(meta['peso_sub']),
             'peso_ind': float(meta['peso_ind']),
             'valor_medio': float(col_valor.mean()),
@@ -122,6 +153,7 @@ def diagnostico(contribuciones, umbral_correlacion=0.40):
         })
 
     df = pd.DataFrame(filas)
+    df.attrs['nivel'] = nivel
     corte_aporte = df['aporte_pct'].median()
 
     def clasificar(fila):
@@ -139,120 +171,6 @@ def diagnostico(contribuciones, umbral_correlacion=0.40):
     df.attrs['corte_aporte'] = float(corte_aporte)
     df.attrs['umbral_correlacion'] = float(umbral_correlacion)
     return df.sort_values('aporte_pct', ascending=False).reset_index(drop=True)
-
-
-def territorial(indice, meta):
-    """Agrega el índice por manzana.
-
-    53 manzanas de una docena de predios son una unidad de gestión accionable;
-    369 predios sueltos no lo son.
-    """
-    df = indice.merge(meta[['id_inmueble', 'manzana']], on='id_inmueble', how='left')
-    df = df[df['manzana'].notna()]
-    if df.empty:
-        return pd.DataFrame(columns=['manzana', 'n_evaluados', 'indice_medio',
-                                     'indice_max', 'n_alto_mas', 'pct_alto_mas'])
-
-    df['nivel'] = df['indice_de_riesgo'].map(niveles.nivel_por_indice)
-    es_alto = df['nivel'].isin([niveles.NIVEL_ALTO, niveles.NIVEL_MUY_ALTO])
-
-    agrupado = df.groupby('manzana').agg(
-        n_evaluados=('id_inmueble', 'count'),
-        indice_medio=('indice_de_riesgo', 'mean'),
-        indice_max=('indice_de_riesgo', 'max'),
-    )
-    agrupado['n_alto_mas'] = es_alto.groupby(df['manzana']).sum()
-    agrupado['pct_alto_mas'] = agrupado['n_alto_mas'] / agrupado['n_evaluados'] * 100
-    agrupado['nivel_medio'] = agrupado['indice_medio'].map(niveles.nivel_por_indice)
-
-    return (agrupado
-            .reset_index()
-            .sort_values(['pct_alto_mas', 'indice_medio'], ascending=False)
-            .reset_index(drop=True))
-
-
-def criticos(contribuciones, meta, etiquetas, top=25, n_factores=3):
-    """Inmuebles de mayor riesgo, con los factores que más los penalizan.
-
-    Es la sección que convierte el informe en algo accionable: hoy el documento
-    no nombra ni un solo inmueble.
-
-    `etiquetas` mapea (subindicador_id, valor) al nombre de la clase, de modo que
-    el factor se lee "Materialidad estructural — Entramado de madera" y no
-    "Materialidad estructural — 4".
-    """
-    if contribuciones.empty:
-        return pd.DataFrame(columns=['id_inmueble', 'direccion', 'rol_sii', 'manzana',
-                                     'indice_de_riesgo', 'nivel', 'factores'])
-
-    total = _indice_total(contribuciones).sort_values(ascending=False)
-    elegidos = total.head(top)
-
-    aportes = contribuciones[contribuciones['id_inmueble'].isin(elegidos.index)]
-    aportes = aportes.sort_values(['id_inmueble', 'contribucion'], ascending=[True, False])
-
-    def describir(fila):
-        clase = (etiquetas.get(int(fila['subindicador_id'])) or {}).get(int(fila['valor']))
-        return f"{fila['subindicador_nombre']} — {clase}" if clase else fila['subindicador_nombre']
-
-    factores = (aportes
-                .groupby('id_inmueble')
-                .head(n_factores)
-                .assign(descripcion=lambda d: d.apply(describir, axis=1))
-                .groupby('id_inmueble')['descripcion']
-                .apply(lambda s: ' · '.join(s)))
-
-    df = pd.DataFrame({'id_inmueble': elegidos.index, 'indice_de_riesgo': elegidos.values})
-    df = df.merge(meta[['id_inmueble', 'direccion', 'rol_sii', 'manzana']],
-                  on='id_inmueble', how='left')
-    df['factores'] = df['id_inmueble'].map(factores)
-    df['nivel'] = df['indice_de_riesgo'].map(niveles.nivel_por_indice)
-    return df.reset_index(drop=True)
-
-
-def cruce(indice_a, indice_b, meta, nombre_a='A', nombre_b='B'):
-    """Cruza dos amenazas sobre los mismos inmuebles.
-
-    Devuelve un DataFrame por inmueble con ambos índices y sus niveles. Los
-    inmuebles evaluados en una sola amenaza se conservan (con NaN en la otra):
-    "351 de 369 evaluados en ambas" es en sí mismo un dato del informe.
-
-    En `attrs` deja la correlación de Pearson, el conteo de altos en ambas y la
-    matriz de contingencia entre niveles.
-    """
-    a = indice_a.rename(columns={'indice_de_riesgo': 'indice_a'})
-    b = indice_b.rename(columns={'indice_de_riesgo': 'indice_b'})
-    df = meta[['id_inmueble', 'direccion', 'rol_sii', 'manzana']].merge(a, on='id_inmueble', how='left')
-    df = df.merge(b, on='id_inmueble', how='left')
-    df = df[df['indice_a'].notna() | df['indice_b'].notna()].copy()
-
-    df['nivel_a'] = df['indice_a'].map(niveles.nivel_por_indice)
-    df['nivel_b'] = df['indice_b'].map(niveles.nivel_por_indice)
-
-    ambas = df[df['indice_a'].notna() & df['indice_b'].notna()]
-    altos = (niveles.NIVEL_ALTO, niveles.NIVEL_MUY_ALTO)
-    en_ambas = ambas[ambas['nivel_a'].isin(altos) & ambas['nivel_b'].isin(altos)]
-
-    orden = list(niveles.NIVELES_RIESGO)
-    matriz = pd.crosstab(
-        pd.Categorical(ambas['nivel_b'], categories=orden, ordered=True),
-        pd.Categorical(ambas['nivel_a'], categories=orden, ordered=True),
-        dropna=False,
-    )
-
-    df.attrs.update({
-        'nombre_a': nombre_a,
-        'nombre_b': nombre_b,
-        'n_ambas': int(len(ambas)),
-        'n_solo_a': int((df['indice_a'].notna() & df['indice_b'].isna()).sum()),
-        'n_solo_b': int((df['indice_b'].notna() & df['indice_a'].isna()).sum()),
-        'correlacion': float(ambas['indice_a'].corr(ambas['indice_b'])) if len(ambas) > 1 else float('nan'),
-        'n_altos_en_ambas': int(len(en_ambas)),
-        'matriz': matriz,
-    })
-
-    df['suma'] = df[['indice_a', 'indice_b']].sum(axis=1, min_count=1)
-    return df.sort_values('suma', ascending=False).reset_index(drop=True)
 
 
 def resumen_distribucion(indice):

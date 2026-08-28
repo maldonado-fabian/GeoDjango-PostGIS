@@ -62,9 +62,6 @@ class ReporteConfigSerializer(serializers.Serializer):
     modo = serializers.ChoiceField(choices=MODOS, default=MODO_EJECUTIVO)
     secciones = serializers.ListField(child=serializers.CharField(), required=False)
     excluir = serializers.ListField(child=serializers.CharField(), required=False)
-    amenaza_comparacion = serializers.IntegerField(required=False, allow_null=True)
-    top_criticos = serializers.IntegerField(required=False, min_value=5, max_value=400)
-    top_manzanas = serializers.IntegerField(required=False, min_value=3, max_value=100)
     incluir_indice = serializers.BooleanField(required=False)
     basemap = serializers.BooleanField(required=False)
 

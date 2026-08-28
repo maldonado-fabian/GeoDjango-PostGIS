@@ -97,12 +97,14 @@ def _dibujar_basemap(ax, crs):
     ax.set_ylim(ylim)
 
 
-def donut(filas, titulo, *, dpi=None):
+def donut(filas, titulo, *, dpi=None, compacto=False, sin_titulo=False):
     """Dona a partir de filas {nivel, cantidad, porcentaje}.
 
     Muestra las porciones con cantidad > 0 etiquetadas "Nº; %" y una leyenda con
     todos los niveles, para que dos donas contiguas sean comparables aunque una
     no tenga inmuebles en algún nivel.
+
+    `compacto` reduce tamaño y tipografía para los bloques de media página.
     """
     tamanos, colores, etiquetas = [], [], []
     for f in filas:
@@ -111,7 +113,8 @@ def donut(filas, titulo, *, dpi=None):
             colores.append(niveles.color(f["nivel"]))
             etiquetas.append(f"{f['cantidad']}; {f['porcentaje']}%")
 
-    fig, ax = plt.subplots(figsize=(4.2, 3.4))
+    escala = 0.82 if compacto else 1.0
+    fig, ax = plt.subplots(figsize=(3.2, 2.9) if compacto else (4.2, 3.4))
     if tamanos:
         ax.pie(
             tamanos,
@@ -119,22 +122,23 @@ def donut(filas, titulo, *, dpi=None):
             startangle=90,
             counterclock=False,
             labels=etiquetas,
-            labeldistance=1.15,
+            labeldistance=1.16,
             wedgeprops=dict(width=0.42, edgecolor="white", linewidth=1),
-            textprops=dict(fontsize=7, color="#333333"),
+            textprops=dict(fontsize=7 * escala, color="#333333"),
         )
     else:
         ax.text(0.5, 0.5, "Sin datos", ha="center", va="center", fontsize=9)
     ax.set_aspect("equal")
-    ax.set_title(titulo, fontsize=8.5, fontweight="bold", pad=10)
+    if not sin_titulo:
+        ax.set_title(titulo, fontsize=8.5 * escala, fontweight="bold", pad=10)
 
     handles = [Patch(facecolor=niveles.color(n), label=n) for n in niveles.NIVELES]
     ax.legend(
         handles=handles,
         loc="upper center",
         bbox_to_anchor=(0.5, -0.02),
-        ncol=3,
-        fontsize=6,
+        ncol=3 if not compacto else 2,
+        fontsize=6 * escala,
         frameon=False,
         handlelength=1,
         columnspacing=1,
@@ -162,7 +166,7 @@ def barras_aporte(df, titulo, *, dpi=None, max_filas=None):
 
     alto = max(2.6, 0.26 * len(datos) + 0.9)
     fig, ax = plt.subplots(figsize=(7.2, alto))
-    ax.barh(datos['subindicador_nombre'], datos['aporte_pct'], color=colores, height=0.68)
+    ax.barh(datos['factor_nombre'], datos['aporte_pct'], color=colores, height=0.68)
 
     for y, (pct, medio) in enumerate(zip(datos['aporte_pct'], datos['valor_medio'])):
         ax.text(pct + 0.15, y, f'{pct:.1f}%  (media {medio:.2f})'.replace('.', ','),
@@ -263,107 +267,24 @@ def distribucion_indice(series_por_amenaza, titulo, *, dpi=None):
     return _png(fig, dpi or DPI_DONA)
 
 
-def matriz_cruzada(matriz, nombre_x, nombre_y, titulo, *, dpi=None):
-    """Contingencia entre los niveles de dos amenazas.
-
-    Escala de grises a propósito: pintar un conteo con la paleta de riesgo lo
-    haría leer como un mapa de riesgo y engañaría.
-    """
-    fig, ax = plt.subplots(figsize=(4.6, 4.0))
-    valores = matriz.values
-    ax.imshow(valores, cmap='Blues', aspect='auto')
-
-    total = valores.sum() or 1
-    umbral = valores.max() * 0.6 if valores.max() else 1
-    for i in range(valores.shape[0]):
-        for j in range(valores.shape[1]):
-            n = valores[i, j]
-            ax.text(j, i, f'{n}\n{n / total * 100:.0f}%'.replace('.', ','),
-                    ha='center', va='center', fontsize=6.5,
-                    color='white' if n > umbral else '#1c1c1a')
-
-    ax.set_xticks(range(len(matriz.columns)))
-    ax.set_xticklabels(matriz.columns, fontsize=6.5, rotation=30, ha='right')
-    ax.set_yticks(range(len(matriz.index)))
-    ax.set_yticklabels(matriz.index, fontsize=6.5)
-    ax.set_xlabel(nombre_x, fontsize=7)
-    ax.set_ylabel(nombre_y, fontsize=7)
-    ax.set_title(titulo, fontsize=8.5, fontweight='bold', pad=8)
-    return _png(fig, dpi or DPI_DONA)
+#: Proporciones del mapa. La compacta es más ancha que alta para que el bloque
+#: entero quepa en media página y dos figuras compartan hoja.
+FIGSIZE_MAPA = (5.6, 6.6)
+FIGSIZE_MAPA_COMPACTO = (4.4, 3.9)
 
 
-def dispersion_amenazas(df, nombre_x, nombre_y, titulo, *, dpi=None):
-    """Índice de una amenaza frente al de otra, con el cuadrante crítico marcado."""
-    from api import riesgo
-
-    datos = df[df['indice_a'].notna() & df['indice_b'].notna()]
-    corte = riesgo.ALTO.minimo
-
-    fig, ax = plt.subplots(figsize=(4.8, 4.2))
-    ax.axvspan(corte, riesgo.ESCALA_MAX, ymin=0, ymax=1, color='#ffe5e5', alpha=0.55, zorder=0)
-    ax.axhspan(corte, riesgo.ESCALA_MAX, xmin=0, xmax=1, color='#ffe5e5', alpha=0.55, zorder=0)
-
-    for valor in (riesgo.MEDIO.minimo, riesgo.ALTO.minimo, riesgo.MUY_ALTO.minimo):
-        ax.axvline(valor, color='#c7cbcc', lw=0.7, zorder=1)
-        ax.axhline(valor, color='#c7cbcc', lw=0.7, zorder=1)
-
-    ax.scatter(datos['indice_a'], datos['indice_b'], s=16, alpha=0.55,
-               color='#2f6f8f', edgecolor='none', zorder=3)
-
-    r = df.attrs.get('correlacion', float('nan'))
-    n_ambas = df.attrs.get('n_altos_en_ambas', 0)
-    ax.set_title(titulo, fontsize=8.5, fontweight='bold', pad=8)
-    ax.text(0.03, 0.97, f'r = {r:.3f}'.replace('.', ',') + f'\n{n_ambas} inmuebles altos en ambas',
-            transform=ax.transAxes, fontsize=6.5, va='top', color='#5b5f60')
-
-    ax.set_xlim(riesgo.ESCALA_MIN, riesgo.ESCALA_MAX)
-    ax.set_ylim(riesgo.ESCALA_MIN, riesgo.ESCALA_MAX)
-    ax.set_xlabel(f'Índice {nombre_x.lower()}', fontsize=7)
-    ax.set_ylabel(f'Índice {nombre_y.lower()}', fontsize=7)
-    ax.tick_params(labelsize=6.5)
-    for lado in ('top', 'right'):
-        ax.spines[lado].set_visible(False)
-    return _png(fig, dpi or DPI_DONA)
-
-
-def barras_manzanas(df, titulo, *, n=10, dpi=None):
-    """Manzanas con mayor proporción de inmuebles en Alto o Muy Alto.
-
-    Anota el número de inmuebles evaluados en cada barra: una manzana con 6 de 6
-    no debe leerse igual que una con 6 de 40.
-    """
-    datos = df.head(n).iloc[::-1]
-    fig, ax = plt.subplots(figsize=(6.4, max(2.4, 0.34 * len(datos) + 0.8)))
-
-    colores = [niveles.color(n_) for n_ in datos['nivel_medio']]
-    ax.barh(datos['manzana'].astype(str), datos['pct_alto_mas'],
-            color=colores, edgecolor='#5b5f60', linewidth=0.4, height=0.66)
-
-    for y, (pct, n_ev, medio) in enumerate(
-            zip(datos['pct_alto_mas'], datos['n_evaluados'], datos['indice_medio'])):
-        ax.text(pct + 1.2, y,
-                f'{pct:.0f}%  ({n_ev} inm., índice {medio:.2f})'.replace('.', ','),
-                va='center', fontsize=6.5, color='#5b5f60')
-
-    ax.set_xlim(0, 128)
-    ax.set_xlabel('% de inmuebles en riesgo alto o muy alto', fontsize=7)
-    ax.set_ylabel('Manzana', fontsize=7)
-    ax.tick_params(labelsize=6.5)
-    ax.set_title(titulo, fontsize=8.5, fontweight='bold', pad=8)
-    for lado in ('top', 'right'):
-        ax.spines[lado].set_visible(False)
-    return _png(fig, dpi or DPI_DONA)
-
-
-def mapa(gdf_color, titulo, leyenda, *, etiqueta_leyenda=None, dpi=None, basemap=True):
+def mapa(gdf_color, titulo, leyenda, *, etiqueta_leyenda=None, dpi=None, basemap=True,
+         compacto=False, sin_titulo=False):
     """Mapa coroplético -> PNG.
 
     `gdf_color`: GeoDataFrame en EPSG:3857 con columna 'color' (hex) por fila.
     `leyenda`: lista de (etiqueta, color_hex).
     `etiqueta_leyenda`: título del recuadro de leyenda. Antes estaba fijo en
     "INCENDIO", de modo que un informe de Sismo rotulaba así sus veinte mapas.
+    `compacto`: proporción y tipografía reducidas, para dos figuras por página.
     """
-    fig, ax = plt.subplots(figsize=(5.6, 6.6))
+    escala = 0.78 if compacto else 1.0
+    fig, ax = plt.subplots(figsize=FIGSIZE_MAPA_COMPACTO if compacto else FIGSIZE_MAPA)
     gdf_color.plot(
         ax=ax,
         color=gdf_color["color"],
@@ -378,13 +299,21 @@ def mapa(gdf_color, titulo, leyenda, *, etiqueta_leyenda=None, dpi=None, basemap
         ax.set_facecolor("#f2f2f2")
 
     ax.set_axis_off()
-    ax.set_title(titulo, fontsize=9, fontweight="bold")
+    # En modo compacto el título lo pone el documento, no la figura: así el
+    # bloque de media página no gasta alto en repetirlo.
+    if not sin_titulo:
+        ax.set_title(titulo, fontsize=9 * escala, fontweight="bold")
+
     handles = [Patch(facecolor=c, edgecolor="black", label=l) for l, c in leyenda]
-    ax.legend(
+    leyenda_ax = ax.legend(
         handles=handles,
         loc="lower left",
-        fontsize=6,
+        fontsize=6 * escala,
         frameon=True,
         title=etiqueta_leyenda,
+        borderpad=0.4,
+        labelspacing=0.3,
     )
+    if leyenda_ax.get_title():
+        leyenda_ax.get_title().set_fontsize(6 * escala)
     return _png(fig, dpi or DPI_MAPA)
