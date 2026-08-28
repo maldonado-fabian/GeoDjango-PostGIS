@@ -18,61 +18,100 @@ seguridad que verifica que la consolidación efectivamente arregla el problema.
 """
 
 import re
+import unittest
 from pathlib import Path
 
 from django.test import SimpleTestCase
 
+from api import riesgo
 from api.reports import niveles
 
 
-# Índice más alto posible: valor 4 en todos los sub-indicadores, pesos que suman 1.
-ESCALA_MAX = 4.0
+#: Valores límite: los tres huecos históricos, sus bordes, y puntos interiores.
+VALORES_FRONTERA = [
+    1.00, 1.50,
+    1.75, 1.755, 1.76,      # antiguo hueco Bajo/Medio
+    2.00, 2.49,
+    2.50, 2.505, 2.51,      # antiguo hueco Medio/Alto
+    2.90, 3.24,
+    3.25, 3.255, 3.26,      # antiguo hueco Alto/Muy Alto
+    3.50, 4.00,
+]
 
 
-def clasificar_export(indice):
-    """Réplica exacta del clasificador de `views.py` (SHP y KML).
+class ParidadPythonSQL(SimpleTestCase):
+    """El clasificador en Python y el CASE de SQL deben coincidir.
 
-    Copiado a propósito en vez de importarlo: si alguien cambia views.py, este
-    test debe seguir describiendo lo que views.py hacía cuando se escribió, y
-    la comparación contra `niveles.py` es lo que detecta la deriva.
+    Se ejecuta el SQL que `riesgo.case_sql()` genera realmente contra Postgres,
+    en vez de replicar su lógica aquí: una réplica en el test envejece con el
+    código y deja de detectar nada.
     """
-    if indice <= 1.75:
-        return niveles.NIVEL_BAJO
-    elif indice <= 2.5:
-        return niveles.NIVEL_MEDIO
-    elif indice <= 3.25:
-        return niveles.NIVEL_ALTO
-    else:
-        return niveles.NIVEL_MUY_ALTO
 
+    databases = []
 
-class ParidadUmbralesBackend(SimpleTestCase):
-    """El PDF y las exportaciones deben clasificar igual el mismo índice."""
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from api.reports.queries import _engine
+            cls.engine = _engine()
+            with cls.engine.connect():
+                pass
+            cls.disponible = True
+        except Exception:
+            cls.disponible = False
 
-    # Valores límite: los tres huecos, sus bordes, y puntos claramente interiores.
-    VALORES = [
-        1.00, 1.50,
-        1.75, 1.755, 1.76,      # hueco Bajo/Medio
-        2.00, 2.49,
-        2.50, 2.505, 2.51,      # hueco Medio/Alto
-        2.90, 3.24,
-        3.25, 3.255, 3.26,      # hueco Alto/Muy Alto
-        3.50, 4.00,
-    ]
+    def test_case_sql_coincide_con_python(self):
+        if not self.disponible:
+            raise unittest.SkipTest('Base de datos no disponible')
 
-    def test_paridad_en_frontera(self):
-        """Ningún valor de la escala debe clasificarse distinto según el módulo."""
+        from sqlalchemy import text
+
+        # Una sola consulta con todos los valores: VALUES(...) alimenta el CASE.
+        filas = ', '.join(f'({v})' for v in VALORES_FRONTERA)
+        sql = f"""
+            SELECT v.indice, {riesgo.case_sql('v.indice')} AS color
+            FROM (VALUES {filas}) AS v(indice)
+        """
+        with self.engine.connect() as con:
+            resultado = con.execute(text(sql)).fetchall()
+
         divergencias = [
-            (v, niveles.nivel_por_indice(v), clasificar_export(v))
-            for v in self.VALORES
-            if niveles.nivel_por_indice(v) != clasificar_export(v)
+            (float(indice), riesgo.nivel_por_indice(indice).color, color_sql)
+            for indice, color_sql in resultado
+            if riesgo.nivel_por_indice(indice).color != color_sql
         ]
         self.assertEqual(
             divergencias, [],
-            'El PDF y las exportaciones clasifican distinto los mismos índices. '
-            'Cada tupla es (índice, nivel en reports/niveles.py, nivel en views.py): '
-            f'{divergencias}'
+            'El clasificador de Python y el CASE de SQL difieren. '
+            f'(índice, color en Python, color en SQL): {divergencias}'
         )
+
+
+class ParidadAdaptador(SimpleTestCase):
+    """El adaptador `reports/niveles.py` no debe alterar la clasificación canónica."""
+
+    databases = []
+
+    def test_adaptador_coincide_con_canonico(self):
+        divergencias = [
+            (v, niveles.nivel_por_indice(v), riesgo.nivel_por_indice(v).label)
+            for v in VALORES_FRONTERA
+            if niveles.nivel_por_indice(v) != riesgo.nivel_por_indice(v).label
+        ]
+        self.assertEqual(divergencias, [], f'El adaptador diverge del canónico: {divergencias}')
+
+    def test_rangos_derivados_de_los_cortes(self):
+        """Los textos de rango se derivan; antes eran literales en la Tabla 2."""
+        self.assertEqual(niveles.rango_texto(niveles.NIVEL_BAJO), '1,00 – 1,75')
+        self.assertEqual(niveles.rango_texto(niveles.NIVEL_MEDIO), '1,76 – 2,50')
+        self.assertEqual(niveles.rango_texto(niveles.NIVEL_ALTO), '2,51 – 3,25')
+        self.assertEqual(niveles.rango_texto(niveles.NIVEL_MUY_ALTO), '3,26 – 4,00')
+
+
+class UmbralesCanonicos(SimpleTestCase):
+
+    databases = []
 
     def test_cortes_declarados(self):
         """Los cortes de niveles.py son los canónicos y no cambiaron por accidente."""
