@@ -121,27 +121,30 @@ def detalle_amenaza_intro(nombre, nombres_indicadores):
     )
 
 
-def parrafo_resultados_amenaza(filas, total):
-    """Describe la distribución en orden de magnitud, no en un orden fijo.
+def _listado_por_magnitud(filas, niveles_incluidos):
+    """'X (Y%) alto, Z (W%) medio y N (M%) bajo' — en orden de magnitud, no fijo.
 
     Antes el orden era literal (alto, medio, muy alto, bajo), así que cuando
     dominaba el nivel bajo la frase abría igual por el alto y se leía torcido.
     """
-    ne = _fila(filas, niveles.NIVEL_NO_EVALUADO)
-    evaluados = [
-        _fila(filas, n) | {"nivel": n}
-        for n in niveles.NIVELES_RIESGO
-    ]
+    evaluados = [_fila(filas, n) | {"nivel": n} for n in niveles_incluidos]
     evaluados.sort(key=lambda f: f["cantidad"], reverse=True)
-
     partes = [
         f"{f['cantidad']} ({f['porcentaje']}%) {f['nivel'].lower()}"
         for f in evaluados if f["cantidad"] > 0
     ]
     if not partes:
+        return ""
+    return partes[0] if len(partes) == 1 else ", ".join(partes[:-1]) + " y " + partes[-1]
+
+
+def parrafo_resultados_amenaza(filas, total):
+    """Describe la distribución en orden de magnitud."""
+    ne = _fila(filas, niveles.NIVEL_NO_EVALUADO)
+    listado = _listado_por_magnitud(filas, niveles.NIVELES_RIESGO)
+    if not listado:
         return f"De los {total} inmuebles del sitio, ninguno cuenta con evaluación registrada."
 
-    listado = partes[0] if len(partes) == 1 else ", ".join(partes[:-1]) + " y " + partes[-1]
     return (
         f"De los {total} inmuebles del sitio, presentan un índice de riesgo {listado}. "
         f"Otros {ne['cantidad']} ({ne['porcentaje']}%) no se evaluaron por corresponder a sitios "
@@ -172,6 +175,35 @@ def parrafo_subindicador(nombre, promedio, nivel):
     )
 
 
+def _parrafo_detalle_factor(etiqueta, nombre, descripcion, filas, promedio):
+    """Párrafo común a indicadores y sub-indicadores: descripción oficial (si
+    existe) + distribución real por nivel + promedio. Ambos niveles evalúan en
+    escala 1 a 4, así que el promedio siempre se expresa "sobre 4".
+    """
+    nivel_prom = niveles.nivel_por_indice(promedio)
+    listado = _listado_por_magnitud(filas, niveles.NIVELES_RIESGO)
+
+    frase_descripcion = f" {descripcion}." if descripcion else ""
+    frase_distribucion = (
+        f" Del total de inmuebles evaluados para este {etiqueta}, {listado}."
+        if listado else
+        f" No se registran inmuebles evaluados para este {etiqueta}."
+    )
+
+    return (
+        f"<b>{nombre}.</b>{frase_descripcion}{frase_distribucion} El promedio alcanzado es de "
+        f"{_num(promedio)} sobre 4, lo que corresponde a un nivel <b>{nivel_prom.lower()}</b>."
+    )
+
+
+def parrafo_indicador_detalle(nombre, descripcion, filas, promedio):
+    return _parrafo_detalle_factor('indicador', nombre, descripcion, filas, promedio)
+
+
+def parrafo_subindicador_detalle(nombre, descripcion, filas, promedio):
+    return _parrafo_detalle_factor('indicador secundario', nombre, descripcion, filas, promedio)
+
+
 def parrafo_distribucion(dist, nombre_amenaza):
     return (
         f"El índice de riesgo frente a {nombre_amenaza.lower()} se distribuye entre "
@@ -183,11 +215,86 @@ def parrafo_distribucion(dist, nombre_amenaza):
 
 # ── Qué factores explican el riesgo ──────────────────────────────────────────
 
-def intro_factores():
+def intro_rangos():
     return (
-        "El gráfico y la tabla siguientes muestran cuánto aporta cada indicador al índice de "
-        "riesgo: entre más ancha la barra, más pesa ese factor en el resultado final."
+        "La <b>Tabla 2</b> detalla el significado de cada rango del índice y el criterio de "
+        "acción que corresponde a cada uno, según la magnitud del riesgo involucrado."
     )
+
+
+def intro_factores(top_nombre, top_pct):
+    return (
+        "El gráfico y la tabla siguientes muestran cuánto aporta cada indicador primario al "
+        f"índice de riesgo: entre más ancha la barra, más pesa ese factor en el resultado "
+        f"final. '<b>{top_nombre}</b>' es el que más incide, con el {_num(top_pct, 1)}% del "
+        "índice total."
+    )
+
+
+# ── Puntos críticos y recomendaciones ────────────────────────────────────────
+# Todo lo que sigue se deriva estrictamente del ranking de aporte por factor
+# (`analytics.aporte_por_factor`): ninguna frase afirma algo que los datos no
+# midan directamente. Mismo criterio que ya rige `NOTAS_POR_AMENAZA`.
+
+def intro_puntos_criticos(nombre_amenaza):
+    return (
+        f"Esta sección identifica, a partir del aporte de cada indicador al índice, los "
+        f"aspectos que más inciden en el resultado de la evaluación frente a la amenaza "
+        f"{nombre_amenaza.lower()} y en qué temas conviene concentrar la atención."
+    )
+
+
+def parrafo_puntos_criticos(top_indicadores, top_subindicadores):
+    """`top_indicadores`/`top_subindicadores`: DataFrames de `aporte_por_factor`,
+    ya ordenados de mayor a menor aporte."""
+    if top_indicadores.empty or top_subindicadores.empty:
+        return "No hay suficientes evaluaciones registradas para identificar puntos críticos."
+
+    ind = top_indicadores.iloc[0]
+    subs = top_subindicadores.head(3)
+    nombres_sub = ", ".join(f"'{n}'" for n in subs['factor_nombre'])
+
+    return (
+        f"A nivel de indicador primario, '<b>{ind['factor_nombre']}</b>' concentra el mayor "
+        f"aporte al índice ({_num(ind['aporte_pct'], 1)}%), con un promedio de "
+        f"{_num(ind['valor_medio'])} sobre 4. A nivel de indicador secundario, los que más "
+        f"aportan son {nombres_sub}, que en conjunto explican el "
+        f"{_num(subs['aporte_pct'].sum(), 1)}% del índice de riesgo. La Figura y la Tabla "
+        f"siguientes detallan los {len(top_subindicadores.head(8))} indicadores secundarios "
+        f"de mayor aporte."
+    )
+
+
+def recomendaciones(top_subindicadores, dist, total_inmuebles):
+    """Frases de recomendación derivadas del ranking de aporte, sin agregar
+    ninguna afirmación que los datos no sustenten directamente."""
+    salida = []
+
+    for _, fila in top_subindicadores.head(3).iterrows():
+        salida.append(
+            f"Priorizar la atención sobre «{fila['factor_nombre']}», que concentra el "
+            f"{_num(fila['aporte_pct'], 1)}% del índice de riesgo con un promedio de "
+            f"{_num(fila['valor_medio'])} sobre 4 en los inmuebles evaluados."
+        )
+
+    if len(top_subindicadores) > 3:
+        resto = top_subindicadores.iloc[3:8]
+        nombres = ", ".join(f"«{n}»" for n in resto['factor_nombre'])
+        if nombres:
+            salida.append(
+                f"Mantener en observación los indicadores secundarios {nombres}, que también "
+                f"figuran entre los de mayor aporte al índice."
+            )
+
+    if dist and dist['n'] < total_inmuebles:
+        pendientes = total_inmuebles - dist['n']
+        salida.append(
+            f"Completar la evaluación de los {pendientes} predios del catastro que aún no "
+            f"cuentan con evaluación registrada, para que el índice represente la totalidad "
+            f"del sitio."
+        )
+
+    return salida
 
 
 # ── Conclusiones ─────────────────────────────────────────────────────────────

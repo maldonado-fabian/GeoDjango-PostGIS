@@ -135,15 +135,18 @@ def contribuciones(amenaza_id):
     """Aporte ponderado de cada sub-indicador en cada inmueble.
 
     Superset de la antigua `subindicador_valores`: agrega los pesos y el aporte
-    ya multiplicado, que es lo que permite separar déficits sistémicos de
-    factores diferenciadores sin recalcular nada en pandas.
+    ya multiplicado, lo que permite calcular el aporte por factor sin repetir
+    consultas. Incluye la descripción del sub-indicador para enriquecer el
+    texto narrativo del informe sin una consulta aparte.
 
-    Columnas: id_inmueble, subindicador_id, subindicador_nombre, indicador_id,
-    indicador_nombre, valor, peso_sub, peso_ind, contribucion.
+    Columnas: id_inmueble, subindicador_id, subindicador_nombre,
+    subindicador_descripcion, indicador_id, indicador_nombre, valor, peso_sub,
+    peso_ind, contribucion.
     """
     df = _leer("""
         SELECT e.id_inmueble,
                si.id AS subindicador_id, si.nombre AS subindicador_nombre,
+               si.descripcion                        AS subindicador_descripcion,
                ind.id AS indicador_id,   ind.nombre AS indicador_nombre,
                e.valor::numeric                      AS valor,
                si.peso                               AS peso_sub,
@@ -162,12 +165,14 @@ def contribuciones(amenaza_id):
 
 def subindicador_valores(amenaza_id):
     """DataFrame [id_inmueble, subindicador_id, subindicador_nombre,
-    indicador_nombre, valor] con el valor crudo de cada evaluación (Figura 3+).
+    subindicador_descripcion, indicador_nombre, valor] con el valor crudo de
+    cada evaluación (Figura 3+).
 
     Se deriva de `contribuciones` para no consultar dos veces lo mismo.
     """
     return contribuciones(amenaza_id)[
-        ["id_inmueble", "subindicador_id", "subindicador_nombre", "indicador_nombre", "valor"]
+        ["id_inmueble", "subindicador_id", "subindicador_nombre",
+         "subindicador_descripcion", "indicador_nombre", "valor"]
     ]
 
 

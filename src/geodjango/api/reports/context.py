@@ -28,6 +28,28 @@ class Contador:
         return self._n
 
 
+class Numerador:
+    """Numeración de secciones: "3. Título" / "3.1 Subtítulo".
+
+    Cada llamada a `h1()` avanza el contador principal y reinicia el de
+    sub-secciones; `h2()` avanza el sub-contador bajo el h1 actual. No valida
+    que h2() se llame después de un h1(): si se usa antes, numera bajo "0".
+    """
+
+    def __init__(self):
+        self._n1 = 0
+        self._n2 = 0
+
+    def h1(self, titulo):
+        self._n1 += 1
+        self._n2 = 0
+        return f'{self._n1}. {titulo}'
+
+    def h2(self, titulo):
+        self._n2 += 1
+        return f'{self._n1}.{self._n2} {titulo}'
+
+
 class ReportContext:
     """Acceso memoizado a todo lo que el informe necesita."""
 
@@ -35,6 +57,7 @@ class ReportContext:
         self.cfg = cfg
         self.figura = Contador()
         self.tabla = Contador()
+        self.titulos = Numerador()
 
         self.amenaza = queries.amenaza(cfg.amenaza_id)
         if self.amenaza is None:
@@ -110,7 +133,8 @@ class ReportContext:
     @cached_property
     def subindicador_valores(self):
         return self.contribuciones[
-            ['id_inmueble', 'subindicador_id', 'subindicador_nombre', 'indicador_nombre', 'valor']
+            ['id_inmueble', 'subindicador_id', 'subindicador_nombre',
+             'subindicador_descripcion', 'indicador_nombre', 'valor']
         ]
 
     # ── análisis ─────────────────────────────────────────────────────────────
@@ -119,6 +143,11 @@ class ReportContext:
     def aporte_indicadores(self):
         """Cuánto aporta cada indicador primario al índice de riesgo."""
         return analytics.aporte_por_factor(self.contribuciones, nivel=analytics.NIVEL_INDICADOR)
+
+    @cached_property
+    def aporte_subindicadores(self):
+        """Cuánto aporta cada indicador secundario al índice de riesgo."""
+        return analytics.aporte_por_factor(self.contribuciones, nivel=analytics.NIVEL_SUBINDICADOR)
 
     @cached_property
     def distribucion(self):

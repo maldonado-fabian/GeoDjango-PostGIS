@@ -23,6 +23,11 @@ def _fig(png, ancho=0.94):
     return imagen(png, USABLE_W * ancho)
 
 
+def _descripciones_indicadores(ctx):
+    """{nombre_indicador: descripcion}, para enriquecer cada bloque."""
+    return dict(zip(ctx.indicadores['nombre'], ctx.indicadores['descripcion']))
+
+
 #: Largo máximo de una etiqueta de clase en la leyenda de un mapa. Por encima
 #: de esto el recuadro se come la figura.
 MAX_ETIQUETA = 28
@@ -38,8 +43,8 @@ def etiqueta_clase(etiquetas, subindicador_id, valor):
     return f'{valor} · {nombre}'
 
 
-def _bloque(ctx, cfg, *, titulo, gdf, leyenda, filas, etiqueta_leyenda, pie):
-    """Bloque compacto de media página: mapa · tabla · dona."""
+def _bloque(ctx, cfg, *, titulo, gdf, leyenda, filas, etiqueta_leyenda, pie, texto=None):
+    """Bloque compacto de media página: mapa · tabla · dona, con párrafo de detalle."""
     mapa_png = charts.mapa(gdf, titulo, leyenda, etiqueta_leyenda=etiqueta_leyenda,
                            dpi=cfg.dpi_mapa, basemap=cfg.basemap,
                            compacto=True, sin_titulo=True)
@@ -47,7 +52,7 @@ def _bloque(ctx, cfg, *, titulo, gdf, leyenda, filas, etiqueta_leyenda, pie):
                             compacto=True, sin_titulo=True)
     tabla = tables.evaluacion(filas, ctx.total_inmuebles, titulo='DISTRIBUCIÓN',
                               ancho=ancho_tabla_compacta())
-    return figura_compacta(titulo, mapa_png, tabla, dona_png, pie)
+    return figura_compacta(titulo, mapa_png, tabla, dona_png, pie, texto=texto)
 
 
 @seccion('amenaza_detalle', 'Resultado de la amenaza', 400)
@@ -68,9 +73,9 @@ def amenaza_detalle(ctx, cfg):
     dona_png = charts.donut(filas, 'RESULTADO GLOBAL Nº; % DE EDIFICIOS', dpi=cfg.dpi_dona)
 
     return [
-        _p(f'Detalle de la amenaza: {ctx.nombre_amenaza}', H1),
+        _p(ctx.titulos.h1(f'Detalle de la amenaza: {ctx.nombre_amenaza}'), H1),
         _p(text.detalle_amenaza_intro(ctx.nombre_amenaza, list(ctx.indicadores['nombre'])), BODY),
-        _p(f'Resultados globales de la amenaza {ctx.nombre_amenaza.lower()}', H2),
+        _p(ctx.titulos.h2(f'Resultados globales de la amenaza {ctx.nombre_amenaza.lower()}'), H2),
         _p(text.parrafo_resultados_amenaza(filas, total), BODY),
         figura_compuesta(mapa_png, tables.evaluacion(filas, total), dona_png),
         _p(f'Figura {ctx.figura.siguiente()}. Resultado global de la amenaza '
@@ -82,13 +87,14 @@ def amenaza_detalle(ctx, cfg):
 def indicadores(ctx, cfg):
     """Qué factores explican el riesgo, y luego un bloque por indicador con mapa."""
     total = ctx.total_inmuebles
-    partes = [_p('Indicadores primarios', H1)]
+    partes = [_p(ctx.titulos.h1('Indicadores primarios'), H1)]
 
     aporte = ctx.aporte_indicadores
     if not aporte.empty:
+        top = aporte.iloc[0]
         partes += [
-            _p('Qué factores explican el riesgo', H2),
-            _p(text.intro_factores(), BODY),
+            _p(ctx.titulos.h2('Qué factores explican el riesgo'), H2),
+            _p(text.intro_factores(top['factor_nombre'], top['aporte_pct']), BODY),
             Spacer(1, 0.2 * cm),
             _fig(charts.barras_aporte(aporte, 'APORTE DE CADA INDICADOR AL ÍNDICE', dpi=cfg.dpi_dona)),
             _p(f'Figura {ctx.figura.siguiente()}. Aporte de cada indicador primario al índice '
@@ -99,11 +105,12 @@ def indicadores(ctx, cfg):
         ]
 
     partes += [
-        _p('Espacialización de los indicadores primarios', H2),
+        _p(ctx.titulos.h2('Espacialización de los indicadores primarios'), H2),
         _p(text.parrafo_indicadores_primarios(), BODY),
     ]
 
     leyenda = [(n, niveles.color(n)) for n in niveles.NIVELES]
+    descripciones = _descripciones_indicadores(ctx)
 
     for _, g in ctx.indicador_scores.groupby('indicador_id', sort=True):
         nombre = g['indicador_nombre'].iloc[0]
@@ -118,6 +125,7 @@ def indicadores(ctx, cfg):
         partes.append(_bloque(
             ctx, cfg, titulo=nombre, gdf=gdf, leyenda=leyenda, filas=filas,
             etiqueta_leyenda='NIVEL',
+            texto=text.parrafo_indicador_detalle(nombre, descripciones.get(nombre), filas, promedio),
             pie=(f'Figura {ctx.figura.siguiente()}. Indicador primario «{nombre}» · '
                  f'promedio {promedio:.2f}'.replace('.', ',')),
         ))
@@ -133,12 +141,13 @@ def subindicadores(ctx, cfg):
     """
     total = ctx.total_inmuebles
     partes = [
-        _p('Espacialización de los indicadores secundarios', H1),
+        _p(ctx.titulos.h1('Indicadores secundarios'), H1),
         _p(text.parrafo_indicadores_secundarios(), BODY),
     ]
 
     for sub_id, g in ctx.subindicador_valores.groupby('subindicador_id', sort=True):
         nombre = g['subindicador_nombre'].iloc[0]
+        descripcion = g['subindicador_descripcion'].iloc[0]
         nivs = [niveles.nivel_por_valor_crudo(v) for v in g['valor']]
         filas = niveles.conteo(nivs, total)
         promedio = float(g['valor'].mean()) if len(g) else 0.0
@@ -155,6 +164,7 @@ def subindicadores(ctx, cfg):
         partes.append(_bloque(
             ctx, cfg, titulo=nombre, gdf=gdf, leyenda=leyenda, filas=filas,
             etiqueta_leyenda='CLASE',
+            texto=text.parrafo_subindicador_detalle(nombre, descripcion, filas, promedio),
             pie=(f'Figura {ctx.figura.siguiente()}. Indicador secundario «{nombre}» · '
                  f'promedio {promedio:.2f}'.replace('.', ',')),
         ))

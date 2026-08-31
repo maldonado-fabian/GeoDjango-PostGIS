@@ -18,24 +18,38 @@ USABLE_W = A4[0] - 2 * MARGIN
 
 _ss = getSampleStyleSheet()
 
-TITULO = ParagraphStyle('Titulo', parent=_ss['Title'], fontSize=18, leading=22)
-SUBTITULO = ParagraphStyle('Subtitulo', parent=_ss['Title'], fontSize=12, leading=16,
-                           textColor=colors.HexColor('#5b5f60'))
-H1 = ParagraphStyle('H1', parent=_ss['Heading1'], fontSize=14, spaceBefore=14, spaceAfter=6)
-H2 = ParagraphStyle('H2', parent=_ss['Heading2'], fontSize=11.5, spaceBefore=10, spaceAfter=4)
+#: Times es una de las 14 fuentes estándar de PDF: no requiere embeber
+#: archivos de letra ni arriesga fallos de renderizado. Es la convención
+#: tipográfica de un informe técnico/institucional impreso.
+_SERIF = 'Times-Roman'
+_SERIF_NEGRITA = 'Times-Bold'
+_SERIF_CURSIVA = 'Times-Italic'
+
+TITULO = ParagraphStyle('Titulo', parent=_ss['Title'], fontName=_SERIF_NEGRITA,
+                        fontSize=19, leading=23)
+SUBTITULO = ParagraphStyle('Subtitulo', parent=_ss['Title'], fontName=_SERIF,
+                           fontSize=12.5, leading=16, textColor=colors.HexColor('#5b5f60'))
+H1 = ParagraphStyle('H1', parent=_ss['Heading1'], fontName=_SERIF_NEGRITA,
+                    fontSize=14.5, spaceBefore=18, spaceAfter=8)
+H2 = ParagraphStyle('H2', parent=_ss['Heading2'], fontName=_SERIF_NEGRITA,
+                    fontSize=11.5, spaceBefore=12, spaceAfter=5)
 #: Título de un bloque compacto. No entra al índice: H1 y H2 sí, H3 no, para que
 #: el índice no se llene con una entrada por cada indicador.
-H3 = ParagraphStyle('H3', parent=_ss['Heading3'], fontSize=9.5, spaceBefore=8, spaceAfter=3)
-BODY = ParagraphStyle('Body', parent=_ss['BodyText'], fontSize=9.5, leading=13, alignment=TA_JUSTIFY)
-CAPTION = ParagraphStyle('Caption', parent=_ss['BodyText'], fontSize=8.5, alignment=TA_CENTER,
+H3 = ParagraphStyle('H3', parent=_ss['Heading3'], fontName=_SERIF_NEGRITA,
+                    fontSize=10, spaceBefore=8, spaceAfter=3)
+BODY = ParagraphStyle('Body', parent=_ss['BodyText'], fontName=_SERIF,
+                      fontSize=9.8, leading=13.6, alignment=TA_JUSTIFY, spaceAfter=4)
+CAPTION = ParagraphStyle('Caption', parent=_ss['BodyText'], fontName=_SERIF_CURSIVA,
+                         fontSize=8.5, alignment=TA_CENTER,
                          textColor=colors.HexColor('#555555'), spaceBefore=4, spaceAfter=10)
-NOTA = ParagraphStyle('Nota', parent=_ss['BodyText'], fontSize=8, leading=11,
+NOTA = ParagraphStyle('Nota', parent=_ss['BodyText'], fontName=_SERIF,
+                      fontSize=8.3, leading=11.5,
                       textColor=colors.HexColor('#5b5f60'), spaceBefore=4)
-CELDA = ParagraphStyle('Celda', parent=_ss['BodyText'], fontSize=7, leading=8.6)
+CELDA = ParagraphStyle('Celda', parent=_ss['BodyText'], fontName=_SERIF, fontSize=7, leading=8.6)
 
-#: Recuadro de hallazgo del resumen ejecutivo.
-HALLAZGO = ParagraphStyle('Hallazgo', parent=BODY, fontSize=9.5, leading=13,
-                          leftIndent=8, spaceBefore=2, spaceAfter=2)
+#: Párrafo de detalle dentro de un bloque compacto (mapa · tabla · dona).
+#: Un punto más chico que BODY para que quepa junto a la figura.
+DETALLE = ParagraphStyle('Detalle', parent=BODY, fontSize=8.8, leading=12, spaceAfter=6)
 
 GRIS = colors.HexColor('#888888')
 GRIS_SUAVE = colors.HexColor('#dddddd')
@@ -94,14 +108,17 @@ _COMPACTA_DONA = 0.30
 _COMPACTA_TABLA = 0.26
 
 
-def figura_compacta(titulo, map_png, tabla_flow, donut_png, pie):
-    """Bloque de media página: mapa · tabla · dona en una sola fila.
+def figura_compacta(titulo, map_png, tabla_flow, donut_png, pie, texto=None):
+    """Bloque de media página: título, párrafo opcional, mapa · tabla · dona.
 
     Dos de estos caben en una página. La versión de página completa apila la
     tabla sobre la dona a la derecha del mapa; aquí los tres van en línea, lo
     que baja la altura a poco más de un tercio de la página.
 
-    Devuelve un `KeepTogether` para que el bloque nunca se parta entre páginas.
+    `texto` es un párrafo de detalle (estilo `DETALLE`) que se inserta entre
+    el título y la fila de figuras. Va dentro del mismo `KeepTogether` que el
+    resto del bloque, así el conjunto título+texto+figura nunca se parte
+    entre dos páginas.
     """
     fila = Table(
         [[imagen(map_png, USABLE_W * _COMPACTA_MAPA),
@@ -119,7 +136,11 @@ def figura_compacta(titulo, map_png, tabla_flow, donut_png, pie):
         ('TOPPADDING', (0, 0), (-1, -1), 0),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
     ]))
-    return KeepTogether([Paragraph(titulo, H3), fila, Paragraph(pie, CAPTION)])
+    partes = [Paragraph(titulo, H3)]
+    if texto:
+        partes.append(Paragraph(texto, DETALLE))
+    partes += [fila, Paragraph(pie, CAPTION)]
+    return KeepTogether(partes)
 
 
 def ancho_tabla_compacta():
