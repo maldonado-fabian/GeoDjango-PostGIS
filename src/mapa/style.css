@@ -52,9 +52,6 @@
   --risk-bajo-bg:    #e2f5e2;
   --risk-nulo-bg:    #eef0f0;
 
-  /* Cifra grande del puntaje (entre #ff6600 y #a33f00) */
-  --score-number:  #cc5200;
-
   /* ---- Radios ---- */
   --r-pill:   999px;
   --r-card:   16px;
@@ -791,7 +788,8 @@ button { cursor: pointer; border: none; background: none; }
   letter-spacing: -0.02em;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  color: var(--score-number);
+  /* El color lo fija main.js según el nivel real (nivel.fg), igual que
+     .score-level: no debe quedar un color fijo aquí que los desalinee. */
 }
 .score-side { padding-bottom: 6px; }
 .score-level { font-size: 15px; font-weight: 800; }

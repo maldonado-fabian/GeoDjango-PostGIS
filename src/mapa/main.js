@@ -184,7 +184,7 @@ function toast(mensaje, tipo = '') {
 // =============================================================================
 
 const baseLayer = new TileLayer({
-  source: new XYZ({ url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png' })
+  source: new XYZ({ url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png?key=cb1_2lln_1_b6707636f616ae58f4dfc24e' })
 });
 
 /** Estilo por nivel: relleno con alfa + borde blanco fino (según diseño). */
@@ -735,7 +735,7 @@ function mostrarFichaInmueble(feature) {
   document.getElementById('panel-content').innerHTML = `
     <div class="score-card">
       <div class="score-top">
-        <div class="score-value">${num(total)}</div>
+        <div class="score-value" style="color:${nivel.fg}">${num(total)}</div>
         <div class="score-side">
           <div class="score-level" style="color:${nivel.fg}">Riesgo ${nivel.label.toLowerCase()}</div>
           <div class="score-range">rango ${nivel.rango} · de ${num(RIESGO_MAX)}</div>
