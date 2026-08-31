@@ -14,11 +14,12 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsEditor
+from . import riesgo
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
 from .serializers import (
     AmenazasSerializer, ClasesSerializer, EvaluacionSerializer, EvaluacionDetalleSerializer,
     IndicadoresSerializer, InmueblesSerializer, InmueblesUpdateSerializer,
-    SubIndicadoresSerializer,
+    ReporteConfigSerializer, SubIndicadoresSerializer,
 )
 from django.conf import settings
 from sqlalchemy import create_engine
@@ -39,9 +40,9 @@ def me(request):
 
 # ── Amenaza activa ────────────────────────────────────────────────────────────
 
-# Escala del índice de riesgo. Debe coincidir con RIESGO_MAX de src/mapa/main.js
-# y con api/reports/niveles.py.
-RIESGO_MAX = 4
+# Escala del índice de riesgo. Definida en api/riesgo.py, que es la fuente única
+# de verdad; se replica en src/mapa/main.js y la paridad la verifica un test.
+RIESGO_MAX = riesgo.ESCALA_MAX
 
 # Amenaza por omisión cuando la petición no la indica: Incendio, la única que
 # existía antes de que la plataforma fuera multi-amenaza.
@@ -382,12 +383,7 @@ def sql_indice_por_inmueble(amenaza_id):
     """
     return f"""
         SELECT id_inmueble, direccion, rol_sii, SUM(total) as indice_de_riesgo, geom,
-            CASE
-                WHEN SUM(total) <= 1.75 THEN '#00FF00'
-                WHEN SUM(total) <= 2.5  THEN '#FFFF00'
-                WHEN SUM(total) <= 3.25 THEN '#FFA500'
-                ELSE '#FF0000'
-            END as symbol_color
+            {riesgo.case_sql('SUM(total)')} as symbol_color
         FROM (
             SELECT e.id_inmueble, i.geom, i.direccion, i.rol_sii, ind.id as indicador_id,
                    SUM(e.valor * si.peso) * ind.peso as total
@@ -543,14 +539,7 @@ class CrearKMLView(APIView):
             color = hex_to_kml_color(row['symbol_color'])
             indice = row['indice_de_riesgo']
             fill_pct = min(round(indice / RIESGO_MAX * 100), 100)
-            if indice <= 1.75:
-                nivel = "Bajo"
-            elif indice <= 2.5:
-                nivel = "Medio"
-            elif indice <= 3.25:
-                nivel = "Alto"
-            else:
-                nivel = "Muy Alto"
+            nivel = riesgo.nivel_por_indice(indice).label
 
             description = f"""
             <div style="font-family:Arial,sans-serif;width:280px;">
@@ -633,30 +622,9 @@ class CrearKMLDetalleView(APIView):
         gdf = gpd.read_postgis(sql, con, geom_col='geom')
         gdf = gdf.to_crs(epsg=4326)
 
-        def get_color(indice):
-            if indice <= 1.75:   return '#00FF00'
-            elif indice <= 2.5:  return '#FFFF00'
-            elif indice <= 3.25: return '#FFA500'
-            else:                return '#FF0000'
-
-        def get_nivel(indice):
-            if indice <= 1.75:   return 'Bajo'
-            elif indice <= 2.5:  return 'Medio'
-            elif indice <= 3.25: return 'Alto'
-            else:                return 'Muy Alto'
-
         def hex_to_kml_color(hex_color):
             h = hex_color.lstrip('#')
             return f'ff{h[4:6]}{h[2:4]}{h[0:2]}'
-
-        def get_value_color(hex_color):
-            # Darker, text-safe versions of each risk color for use on white bg
-            return {
-                '#00FF00': '#16a34a',
-                '#FFFF00': '#a16207',
-                '#FFA500': '#c2410c',
-                '#FF0000': '#dc2626',
-            }.get(hex_color, '#374151')
 
         kml = simplekml.Kml()
         kml.document.name = f'Riesgo de {amenaza}'
@@ -670,11 +638,12 @@ class CrearKMLDetalleView(APIView):
 
             indicadores = detalle.get('indicadores') or []
             total_riesgo = sum((ind.get('riesgo_indicador') or 0) for ind in indicadores)
-            hex_color = get_color(total_riesgo)
+            nivel_riesgo = riesgo.nivel_por_indice(total_riesgo)
+            hex_color = nivel_riesgo.color
             kml_color = hex_to_kml_color(hex_color)
-            nivel = get_nivel(total_riesgo)
+            nivel = nivel_riesgo.label
             fill_pct = min(round(total_riesgo / RIESGO_MAX * 100), 100)
-            value_color = get_value_color(hex_color)
+            value_color = nivel_riesgo.color_texto
 
             # Pick header text colors based on background luminance
             _h = hex_color.lstrip('#')
@@ -755,15 +724,21 @@ from .tasks import generar_pdf_resumen_task
 
 
 class GenerarPDFResumenView(APIView):
-    """POST: encola la generación del PDF de resumen y devuelve el task_id."""
+    """POST: encola la generación del informe de una amenaza y devuelve el task_id."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        amenaza_id = request.data.get('amenaza_id', 1)
-        try:
-            amenaza_id = int(amenaza_id)
-        except (TypeError, ValueError):
-            return Response({'error': 'amenaza_id inválido'}, status=status.HTTP_400_BAD_REQUEST)
+        datos = dict(request.data or {})
+        datos.setdefault('amenaza_id', AMENAZA_POR_DEFECTO)
+
+        serializer = ReporteConfigSerializer(data=datos)
+        serializer.is_valid(raise_exception=True)
+        amenaza_id = serializer.validated_data['amenaza_id']
+
+        if not Amenazas.objects.filter(pk=amenaza_id).exists():
+            return Response({'amenaza_id': 'No existe la amenaza indicada.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         tarea = generar_pdf_resumen_task.delay(amenaza_id)
         return Response({'task_id': tarea.id, 'estado': 'PENDING'},
                         status=status.HTTP_202_ACCEPTED)

@@ -27,6 +27,9 @@ services:
       - "8000:8000"
     volumes:
       - ./src/geodjango:/app/src/geodjango
+      # Solo lectura: lo usa el test de paridad de umbrales, que compara los
+      # cortes de riesgo de main.js contra los del backend (api/tests/test_umbrales.py).
+      - ./src/mapa:/app/src/mapa:ro
     environment:
       POSTGRES_HOST: postgis
       POSTGRES_PORT: 5432

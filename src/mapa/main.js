@@ -184,7 +184,7 @@ function toast(mensaje, tipo = '') {
 // =============================================================================
 
 const baseLayer = new TileLayer({
-  source: new XYZ({ url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png' })
+  source: new XYZ({ url: 'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png?key=cb1_2lln_1_b6707636f616ae58f4dfc24e' })
 });
 
 /** Estilo por nivel: relleno con alfa + borde blanco fino (según diseño). */
@@ -735,7 +735,7 @@ function mostrarFichaInmueble(feature) {
   document.getElementById('panel-content').innerHTML = `
     <div class="score-card">
       <div class="score-top">
-        <div class="score-value">${num(total)}</div>
+        <div class="score-value" style="color:${nivel.fg}">${num(total)}</div>
         <div class="score-side">
           <div class="score-level" style="color:${nivel.fg}">Riesgo ${nivel.label.toLowerCase()}</div>
           <div class="score-range">rango ${nivel.rango} · de ${num(RIESGO_MAX)}</div>
@@ -1096,10 +1096,11 @@ document.getElementById('btn-descargar-kml').addEventListener('click', async () 
   }
 });
 
-document.getElementById('btn-descargar-pdf').addEventListener('click', async () => {
+/** Encola el informe de la amenaza activa, hace polling del estado y lo descarga. */
+async function generarInforme() {
   cerrarMenus();
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  toast('Generando PDF resumen…');
+  toast('Generando informe…');
 
   try {
     const resGen = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/`, {
@@ -1120,13 +1121,17 @@ document.getElementById('btn-descargar-pdf').addEventListener('click', async () 
 
     const resPdf = await apiFetch(`${API_BASE}/api/generar-pdf-resumen/descargar/${task_id}/`);
     if (!resPdf.ok) throw new Error('Error al descargar el PDF');
+    // El nombre lleva la amenaza: el informe de Sismo y el de Incendio no
+    // deben quedar indistinguibles en la carpeta de descargas.
     const nombre = (state.amenazaActiva?.nombre || 'Riesgo').replace(/\s+/g, '_');
-    descargarBlob(await resPdf.blob(), `Resumen_${nombre}.pdf`);
-    toast('PDF descargado.', 'ok');
+    descargarBlob(await resPdf.blob(), `Informe_${nombre}.pdf`);
+    toast('Informe descargado.', 'ok');
   } catch (e) {
-    if (e.message !== 'Session expired') toast('No se pudo generar el PDF de resumen.', 'error');
+    if (e.message !== 'Session expired') toast('No se pudo generar el informe.', 'error');
   }
-});
+}
+
+document.getElementById('btn-descargar-pdf').addEventListener('click', generarInforme);
 
 function descargarBlob(blob, nombre) {
   const url = URL.createObjectURL(blob);

@@ -46,6 +46,15 @@ class InmueblesUpdateSerializer(serializers.ModelSerializer):
         fields = ['id', 'direccion', 'region', 'manzana', 'predio']
         read_only_fields = ['id']
 
+class ReporteConfigSerializer(serializers.Serializer):
+    """Parámetros de generación del informe PDF.
+
+    Un solo informe por amenaza: el único parámetro es cuál.
+    """
+
+    amenaza_id = serializers.IntegerField(min_value=1)
+
+
 class RiesgoConteoSerializer(serializers.Serializer):
     nivel_riesgo = serializers.CharField()
     cantidad = serializers.IntegerField()
