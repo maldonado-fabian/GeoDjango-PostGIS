@@ -50,6 +50,13 @@ const NIVELES_PARCIAL = [
   { key: 'bajo',    label: 'Bajo',     fill: '#00aa00', fg: '#00752b', tint: '#e2f5e2', min: -Infinity }
 ];
 
+// "Sin evaluar": no es un nivel de riesgo (no tiene rango en la escala 0-4),
+// así que vive fuera de NIVELES a propósito — api/tests/test_umbrales.py
+// verifica que ese array tenga exactamente los 4 niveles de riesgo reales.
+// Valores calcados de api/riesgo.py:NO_EVALUADO, que también fijan
+// --risk-nulo/--risk-nulo-fg en style.css.
+const NO_EVALUADO = { key: 'noeval', label: 'No evaluado', fill: '#9e9e9e', fg: '#5b5f60', tint: '#eef0f0', rango: '—' };
+
 const RIESGO_MAX = 4;
 
 /** Nivel para el índice total (escala 0–4). */
@@ -92,6 +99,16 @@ function propsDetalle(feature) {
     try { return JSON.parse(d); } catch { return { indicadores: [] }; }
   }
   return d || { indicadores: [] };
+}
+
+/**
+ * `indicadores` es `null` cuando el inmueble no tiene ninguna evaluación para
+ * la amenaza activa (el `jsonb_agg` de la función SQL no matchea filas), y un
+ * array —vacío o no— en cualquier otro caso. Es la señal precisa: nunca hay
+ * que inferirlo de `riesgoTotalDe(...) === 0`, que también da 0 con datos reales.
+ */
+function sinEvaluar(feature) {
+  return propsDetalle(feature).indicadores == null;
 }
 
 // =============================================================================
@@ -196,8 +213,16 @@ function estiloPorValor(valor, escala) {
   });
 }
 
+/** Relleno gris punteado para inmuebles sin evaluación en la amenaza activa. */
+const estiloSinEvaluar = new Style({
+  fill: new Fill({ color: NO_EVALUADO.fill + '99' }),
+  stroke: new Stroke({ color: '#ffffff', width: 1, lineDash: [4, 3] })
+});
+
 /** Vista general: color por índice de riesgo total del inmueble. */
-const estiloTotal = feature => estiloPorValor(riesgoTotalDe(propsDetalle(feature)), 'total');
+const estiloTotal = feature => sinEvaluar(feature)
+  ? estiloSinEvaluar
+  : estiloPorValor(riesgoTotalDe(propsDetalle(feature)), 'total');
 
 const geojsonSource = new VectorSource({
   format: new GeoJSON(),
@@ -439,12 +464,13 @@ function pintarTituloAmenaza() {
 
 function calcularDistribucion() {
   const features = geojsonSource.getFeatures();
-  const conteo = { muyalto: 0, alto: 0, medio: 0, bajo: 0 };
+  const conteo = { muyalto: 0, alto: 0, medio: 0, bajo: 0, noeval: 0 };
   features.forEach(f => {
+    if (sinEvaluar(f)) { conteo.noeval++; return; }
     const nivel = nivelTotal(riesgoTotalDe(propsDetalle(f)));
     conteo[nivel.key]++;
   });
-  state.distribucion = NIVELES.map(n => ({ ...n, cantidad: conteo[n.key] }));
+  state.distribucion = [...NIVELES, NO_EVALUADO].map(n => ({ ...n, cantidad: conteo[n.key] }));
   return state.distribucion;
 }
 
@@ -474,7 +500,7 @@ function pintarLeyenda() {
 }
 
 function contarIndicadores() {
-  const f = geojsonSource.getFeatures()[0];
+  const f = geojsonSource.getFeatures().find(f => !sinEvaluar(f));
   if (!f) return 0;
   return (propsDetalle(f).indicadores || []).length;
 }
@@ -618,6 +644,7 @@ function seleccionarIndicador(nombre) {
   geojsonLayer.setStyle(estiloClickeable);
   indicadorLayer.setVisible(true);
   indicadorLayer.setStyle(feature => {
+    if (sinEvaluar(feature)) return estiloSinEvaluar;
     const ind = (propsDetalle(feature).indicadores || []).find(i => i.indicador_nombre === nombre);
     return estiloPorValor(ind?.riesgo_indicador || 0, 'parcial');
   });
@@ -635,6 +662,7 @@ function seleccionarSubindicador(nombre) {
   geojsonLayer.setStyle(estiloClickeable);
   indicadorLayer.setVisible(true);
   indicadorLayer.setStyle(feature => {
+    if (sinEvaluar(feature)) return estiloSinEvaluar;
     let valor = 0;
     for (const ind of propsDetalle(feature).indicadores || []) {
       const sub = (ind.sub_indicadores || []).find(s => s.sub_indicador_nombre === nombre);
@@ -668,6 +696,7 @@ function segmentosEscala() {
 function mostrarFichaInmueble(feature) {
   const props = feature.getProperties();
   const detalle = propsDetalle(feature);
+  const noEvaluado = detalle.indicadores == null;
   const indicadores = detalle.indicadores || [];
   const total = riesgoTotalDe(detalle);
   const nivel = nivelTotal(total);
@@ -732,7 +761,14 @@ function mostrarFichaInmueble(feature) {
       </div>`;
   }).join('') : '<p class="panel-placeholder">Este inmueble no tiene evaluaciones registradas.</p>';
 
-  document.getElementById('panel-content').innerHTML = `
+  const scoreCardHtml = noEvaluado ? `
+    <div class="score-card">
+      <div class="score-top">
+        <span class="clase-chip" style="background:${NO_EVALUADO.tint};color:${NO_EVALUADO.fg};font-size:14px;padding:6px 14px;">${NO_EVALUADO.label}</span>
+      </div>
+      <p class="panel-placeholder">Sin evaluación para ${esc(state.amenazaActiva?.nombre || 'esta amenaza')}.</p>
+    </div>
+  ` : `
     <div class="score-card">
       <div class="score-top">
         <div class="score-value" style="color:${nivel.fg}">${num(total)}</div>
@@ -749,6 +785,10 @@ function mostrarFichaInmueble(feature) {
         </div>
       </div>
     </div>
+  `;
+
+  document.getElementById('panel-content').innerHTML = `
+    ${scoreCardHtml}
 
     <div class="explica">
       <div class="kicker">Qué explica este puntaje</div>
@@ -759,8 +799,9 @@ function mostrarFichaInmueble(feature) {
   `;
 
   document.getElementById('ficha-foot').hidden = state.role !== 'editor';
+  document.getElementById('btn-evaluar-inmueble').hidden = !(state.role === 'editor' && noEvaluado);
 
-  if (state.role === 'editor' && inmuebleId) {
+  if (state.role === 'editor' && inmuebleId && !noEvaluado) {
     cargarEvaluacionesEnFicha(inmuebleId);
   }
 
@@ -1078,6 +1119,134 @@ async function guardarClase(id) {
 }
 
 // =============================================================================
+// EDITOR: nueva evaluación (inmuebles sin evaluar)
+// =============================================================================
+
+const evaluarModal = document.getElementById('evaluar-panel');
+const evaluarFoot = document.getElementById('evaluar-panel-foot');
+const evaluarBtnGuardar = document.getElementById('btn-guardar-evaluacion-lote');
+const evaluarFeedback = document.getElementById('evaluar-feedback');
+
+document.getElementById('btn-evaluar-inmueble').addEventListener('click', () => {
+  if (state.inmuebleSeleccionado) abrirModalEvaluar(state.inmuebleSeleccionado.id);
+});
+document.getElementById('btn-cerrar-evaluar').addEventListener('click', cerrarModalEvaluar);
+document.getElementById('evaluar-backdrop').addEventListener('click', cerrarModalEvaluar);
+
+function cerrarModalEvaluar() {
+  evaluarModal.hidden = true;
+  evaluarFoot.hidden = true;
+  evaluarBtnGuardar.disabled = true;
+  evaluarFeedback.className = 'edit-feedback';
+  evaluarFeedback.textContent = '';
+}
+
+/** Trae el roster completo de sub-indicadores de la amenaza activa y arma el formulario. */
+async function abrirModalEvaluar(inmuebleId) {
+  const amenazaId = state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO;
+  const amenazaNombre = state.amenazaActiva?.nombre || '';
+  evaluarModal.hidden = false;
+  evaluarFoot.hidden = true;
+  document.getElementById('evaluar-panel-title').textContent =
+    amenazaNombre ? `Evaluar inmueble · ${amenazaNombre}` : 'Evaluar inmueble';
+  const content = document.getElementById('evaluar-panel-content');
+  content.innerHTML = '<p class="panel-placeholder">Cargando sub-indicadores…</p>';
+
+  try {
+    const [indRes, subRes, clasesRes] = await Promise.all([
+      apiFetch(`${API_BASE}/api/indicadores/?amenaza_id=${amenazaId}`),
+      apiFetch(`${API_BASE}/api/subindicadores/?amenaza_id=${amenazaId}`),
+      apiFetch(`${API_BASE}/api/clases/?amenaza_id=${amenazaId}`)
+    ]);
+    if (!indRes.ok || !subRes.ok || !clasesRes.ok) throw new Error('Error al cargar datos');
+
+    const indicadores = await indRes.json();
+    const subindicadores = await subRes.json();
+    const clases = await clasesRes.json();
+
+    const clasesPorSub = {};
+    clases.forEach(c => { (clasesPorSub[c.sub_indicador] ||= []).push(c); });
+    Object.values(clasesPorSub).forEach(arr => arr.sort((a, b) => a.valor - b.valor));
+
+    const subsPorIndicador = {};
+    subindicadores.forEach(s => { (subsPorIndicador[s.indicador] ||= []).push(s); });
+
+    const html = indicadores.map(ind => {
+      const subs = subsPorIndicador[ind.id] || [];
+      if (!subs.length) return '';
+      return `
+        <div class="clase-group">
+          <div class="clase-group-title">${esc(ind.nombre)}</div>
+          ${subs.map(s => {
+            const opciones = clasesPorSub[s.id] || [];
+            return `
+              <div class="clase-row">
+                <span class="clase-nombre">${esc(s.nombre)}</span>
+                <select class="eval-clase-select" data-subindicador-id="${s.id}" aria-label="Clase de ${esc(s.nombre)}">
+                  <option value="">Seleccionar…</option>
+                  ${opciones.map(c => `<option value="${c.valor}">${esc(c.nombre)}</option>`).join('')}
+                </select>
+              </div>`;
+          }).join('')}
+        </div>`;
+    }).join('');
+
+    content.innerHTML = html || '<p class="panel-placeholder">Esta amenaza no tiene sub-indicadores definidos.</p>';
+    evaluarFoot.hidden = false;
+
+    const selects = content.querySelectorAll('.eval-clase-select');
+    const revisarCompletitud = () => {
+      evaluarBtnGuardar.disabled = ![...selects].every(s => s.value !== '');
+    };
+    selects.forEach(s => s.addEventListener('change', revisarCompletitud));
+    revisarCompletitud();
+
+    evaluarBtnGuardar.onclick = () => guardarEvaluacionLote(inmuebleId, amenazaId, selects);
+  } catch (e) {
+    if (e.message !== 'Session expired') {
+      content.innerHTML = '<p class="panel-placeholder">Error al cargar los sub-indicadores.</p>';
+    }
+  }
+}
+
+async function guardarEvaluacionLote(inmuebleId, amenazaId, selects) {
+  const evaluaciones = [...selects].map(s => ({
+    id_subindicador: Number(s.dataset.subindicadorId),
+    valor: Number(s.value)
+  }));
+
+  evaluarBtnGuardar.disabled = true;
+  evaluarBtnGuardar.textContent = 'Guardando…';
+  evaluarFeedback.className = 'edit-feedback';
+
+  try {
+    const res = await apiFetch(`${API_BASE}/api/evaluacion/inmueble/${inmuebleId}/crear-lote/`, {
+      method: 'POST',
+      body: JSON.stringify({ amenaza_id: amenazaId, evaluaciones })
+    });
+
+    if (res.ok) {
+      toast('Evaluación creada.', 'ok');
+      cerrarModalEvaluar();
+      await actualizarFeatureEnMapa(inmuebleId);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      evaluarFeedback.className = 'edit-feedback error';
+      evaluarFeedback.textContent = Object.values(err).flat().join(' ') || 'No se pudo guardar la evaluación.';
+      evaluarBtnGuardar.disabled = false;
+    }
+  } catch (e) {
+    if (e.message !== 'Session expired') {
+      evaluarFeedback.className = 'edit-feedback error';
+      evaluarFeedback.textContent = 'Error de conexión.';
+      evaluarBtnGuardar.disabled = false;
+    }
+  } finally {
+    evaluarBtnGuardar.textContent = 'Guardar evaluación';
+  }
+}
+
+// =============================================================================
 // EXPORTACIONES
 // =============================================================================
 
@@ -1257,7 +1426,8 @@ document.getElementById('btn-cerrar-ficha').addEventListener('click', cerrarFich
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (!clasesModal.hidden) cerrarPanelClases();
+    if (!evaluarModal.hidden) cerrarModalEvaluar();
+    else if (!clasesModal.hidden) cerrarPanelClases();
     else if (!shell.classList.contains('is-right-closed')) cerrarFicha();
   }
 });

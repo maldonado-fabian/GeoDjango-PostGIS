@@ -10,13 +10,17 @@
 --
 --     http://localhost:9000/functions/postgisftw.detalle_calculo/items?amenaza_id=1
 --
--- Tres diferencias respecto de la vista original:
+-- Diferencias respecto de la vista original:
 --
 --   1. La amenaza es un parámetro.
---   2. El filtro externo de inmuebles también se acota a la amenaza. Antes era
---      `EXISTS (SELECT 1 FROM evaluacion WHERE id_inmueble = i.id)` sin más, así
---      que un inmueble evaluado sólo para otra amenaza salía igual, con
---      `detalle_riesgo` en null.
+--   2. Ya no hay filtro externo por evaluación: la función devuelve todos los
+--      inmuebles (o el pedido por `inmueble_id`), tengan o no evaluación para
+--      la amenaza. Cuando no la tienen, el `jsonb_agg` interno no matchea
+--      ninguna fila y `detalle_riesgo` queda como `{"indicadores": null}` —
+--      nunca `[]`, porque `jsonb_agg` sobre cero filas siempre da NULL. Es la
+--      señal que el mapa usa para pintar "sin evaluar" en vez de inventar un
+--      0. (Antes había un `EXISTS` externo que los excluía por completo; eso
+--      dejaba esos inmuebles invisibles e imposibles de clickear en el mapa.)
 --   3. El `JOIN clases` pasa a LEFT JOIN LATERAL con agregación. La vista unía
 --      por `c.valor = e.valor`, y en Sismo hay sub-indicadores con varias clases
 --      del mismo puntaje ("Tipo de fundaciones" tiene dos clases de valor 4,
@@ -101,15 +105,7 @@ AS $$
               )
         )) AS detalle_riesgo
     FROM inmuebles i
-    WHERE (detalle_calculo.inmueble_id IS NULL OR i.id = detalle_calculo.inmueble_id)
-      AND EXISTS (
-        SELECT 1
-        FROM evaluacion e
-        JOIN sub_indicadores si ON e.id_subindicador = si.id
-        JOIN indicadores ind    ON si.indicador_id = ind.id
-        WHERE e.id_inmueble = i.id
-          AND ind.amenaza_id = detalle_calculo.amenaza_id
-    );
+    WHERE (detalle_calculo.inmueble_id IS NULL OR i.id = detalle_calculo.inmueble_id);
 $$
 LANGUAGE sql STABLE PARALLEL SAFE;
 
@@ -153,4 +149,20 @@ FROM postgisftw.detalle_calculo(
 --        jsonb_array_elements(detalle_riesgo->'indicadores') ind,
 --        jsonb_array_elements(ind->'sub_indicadores') sub
 --   GROUP BY 1, 2 HAVING COUNT(*) > 1;
+--
+-- La función ya no excluye inmuebles sin evaluación: debe devolver el total de
+-- inmuebles siempre, sin importar la amenaza.
+--
+--   SELECT count(*) FROM postgisftw.detalle_calculo(
+--       (SELECT id FROM amenazas WHERE nombre='Incendio'));
+--
+-- Inmuebles sin evaluación para una amenaza: OJO con `->` vs `->>` acá. La
+-- clave 'indicadores' siempre existe en el objeto (jsonb_build_object la pone
+-- igual); lo que puede ser null es su valor. `->` devuelve jsonb, y el jsonb
+-- 'null' NO es SQL NULL, así que `detalle_riesgo->'indicadores' IS NULL` no
+-- matchea nada. Hay que usar `->>`, que sí colapsa el null de JSON a NULL de SQL:
+--
+--   SELECT id, direccion FROM postgisftw.detalle_calculo(
+--       (SELECT id FROM amenazas WHERE nombre='Incendio'))
+--   WHERE detalle_riesgo->>'indicadores' IS NULL;
 -- =============================================================================

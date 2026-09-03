@@ -947,6 +947,13 @@ button { cursor: pointer; border: none; background: none; }
 }
 .modal-title { font-size: 22px; margin-top: 8px; }
 .modal-body { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 24px 24px; }
+.modal-foot {
+  flex-shrink: 0;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.modal-foot .edit-feedback { margin-bottom: 10px; }
 
 .clase-group { margin-bottom: 18px; }
 .clase-group-title {

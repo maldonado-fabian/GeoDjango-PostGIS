@@ -46,6 +46,24 @@ class InmueblesUpdateSerializer(serializers.ModelSerializer):
         fields = ['id', 'direccion', 'region', 'manzana', 'predio']
         read_only_fields = ['id']
 
+class EvaluacionLoteItemSerializer(serializers.Serializer):
+    id_subindicador = serializers.IntegerField()
+    valor = serializers.IntegerField(min_value=1, max_value=4)
+
+
+class EvaluacionLoteSerializer(serializers.Serializer):
+    """Evaluación completa de un inmueble para una amenaza, en una sola request.
+
+    Se exige el roster completo de sub-indicadores de la amenaza (validado en
+    la vista, contra el mismo filtro que usa `lista_subindicadores`): una
+    evaluación parcial haría que el inmueble se viera "evaluado" en el mapa
+    con un índice de riesgo artificialmente bajo.
+    """
+
+    amenaza_id = serializers.IntegerField(min_value=1)
+    evaluaciones = EvaluacionLoteItemSerializer(many=True, allow_empty=False)
+
+
 class ReporteConfigSerializer(serializers.Serializer):
     """Parámetros de generación del informe PDF.
 
