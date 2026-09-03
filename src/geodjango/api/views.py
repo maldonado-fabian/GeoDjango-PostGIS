@@ -18,10 +18,12 @@ from . import riesgo
 from .models import Amenazas, Clases, Evaluacion, Indicadores, Inmuebles, SubIndicadores
 from .serializers import (
     AmenazasSerializer, ClasesSerializer, EvaluacionSerializer, EvaluacionDetalleSerializer,
-    IndicadoresSerializer, InmueblesSerializer, InmueblesUpdateSerializer,
+    EvaluacionLoteSerializer, IndicadoresSerializer, InmueblesSerializer, InmueblesUpdateSerializer,
     ReporteConfigSerializer, SubIndicadoresSerializer,
 )
 from django.conf import settings
+from django.db import IntegrityError, transaction
+from datetime import date
 from sqlalchemy import create_engine
 from django.http import HttpResponse
 from dotenv import load_dotenv
@@ -217,6 +219,86 @@ def actualizar_evaluacion(request, pk):
         serializer.save()
         return Response(serializer.data)
     return Response(serializer.errors, status=400)
+
+
+@api_view(['POST'])
+@permission_classes([IsEditor])
+def crear_evaluacion_lote(request, pk):
+    """Crea de una vez la evaluación completa de un inmueble para una amenaza.
+
+    A diferencia de `crear_evaluacion` (una fila por request), este endpoint
+    exige el roster completo de sub-indicadores de la amenaza en un solo
+    request atómico. Es la vía para evaluar por primera vez un inmueble que
+    hoy no tiene ninguna evaluación; para corregir un valor puntual ya
+    evaluado se sigue usando `actualizar_evaluacion`.
+    """
+    try:
+        inmueble = Inmuebles.objects.get(pk=pk)
+    except Inmuebles.DoesNotExist:
+        return Response({'error': 'Inmueble no encontrado'}, status=404)
+
+    serializer = EvaluacionLoteSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    amenaza_id = serializer.validated_data['amenaza_id']
+    items = serializer.validated_data['evaluaciones']
+
+    if not Amenazas.objects.filter(pk=amenaza_id).exists():
+        return Response({'amenaza_id': 'No existe la amenaza indicada.'}, status=400)
+
+    ids_enviados = [item['id_subindicador'] for item in items]
+    if len(ids_enviados) != len(set(ids_enviados)):
+        return Response({'evaluaciones': 'Hay sub-indicadores repetidos en la solicitud.'}, status=400)
+
+    roster = set(
+        SubIndicadores.objects.filter(indicador__amenaza_id=amenaza_id)
+        .values_list('id', flat=True)
+    )
+    enviados = set(ids_enviados)
+
+    invalidos = enviados - roster
+    if invalidos:
+        return Response(
+            {'evaluaciones': f'Sub-indicadores que no pertenecen a la amenaza: {sorted(invalidos)}'},
+            status=400,
+        )
+
+    faltantes = roster - enviados
+    if faltantes:
+        return Response(
+            {'evaluaciones': f'Faltan sub-indicadores por evaluar: {sorted(faltantes)}'},
+            status=400,
+        )
+
+    ya_evaluados = list(
+        Evaluacion.objects.filter(id_inmueble=pk, id_subindicador__in=enviados)
+        .values_list('id_subindicador', flat=True)
+    )
+    if ya_evaluados:
+        return Response(
+            {'evaluaciones': f'Ya existe evaluación para: {sorted(ya_evaluados)}. '
+                              'Usa /api/evaluacion/actualizar/<id>/ para corregirla.'},
+            status=409,
+        )
+
+    hoy = date.today()
+    filas = [
+        Evaluacion(id_inmueble=inmueble, id_subindicador_id=item['id_subindicador'],
+                    valor=item['valor'], fecha_evaluacion=hoy)
+        for item in items
+    ]
+
+    try:
+        with transaction.atomic():
+            creadas = Evaluacion.objects.bulk_create(filas)
+    except IntegrityError:
+        return Response(
+            {'evaluaciones': 'Ya existe una evaluación para uno de estos sub-indicadores. '
+                              'Recarga e intenta de nuevo.'},
+            status=409,
+        )
+
+    serializer = EvaluacionDetalleSerializer(creadas, many=True)
+    return Response(serializer.data, status=201)
 
 
 # ── Indicadores ───────────────────────────────────────────────────────────────
@@ -637,13 +719,19 @@ class CrearKMLDetalleView(APIView):
                 detalle = json.loads(detalle)
 
             indicadores = detalle.get('indicadores') or []
-            total_riesgo = sum((ind.get('riesgo_indicador') or 0) for ind in indicadores)
-            nivel_riesgo = riesgo.nivel_por_indice(total_riesgo)
+            if indicadores:
+                total_riesgo = sum((ind.get('riesgo_indicador') or 0) for ind in indicadores)
+                nivel_riesgo = riesgo.nivel_por_indice(total_riesgo)
+                fill_pct = min(round(total_riesgo / RIESGO_MAX * 100), 100)
+            else:
+                total_riesgo = None
+                nivel_riesgo = riesgo.NO_EVALUADO
+                fill_pct = 0
             hex_color = nivel_riesgo.color
             kml_color = hex_to_kml_color(hex_color)
             nivel = nivel_riesgo.label
-            fill_pct = min(round(total_riesgo / RIESGO_MAX * 100), 100)
             value_color = nivel_riesgo.color_texto
+            total_riesgo_txt = round(total_riesgo, 2) if total_riesgo is not None else '—'
 
             # Pick header text colors based on background luminance
             _h = hex_color.lstrip('#')
@@ -677,7 +765,7 @@ class CrearKMLDetalleView(APIView):
                 f'<div style="background:#fafafa;padding:8px 10px;border:1px solid #e0e0e0;border-top:none;">'
                 f'<table style="width:100%;margin-bottom:6px;"><tr>'
                 f'<td style="font-size:10px;color:#555;">Índice de Riesgo Total</td>'
-                f'<td style="font-size:14px;font-weight:bold;text-align:right;color:{value_color};">{round(total_riesgo,2)}<span style="font-size:10px;color:#999;"> / {RIESGO_MAX}</span></td>'
+                f'<td style="font-size:14px;font-weight:bold;text-align:right;color:{value_color};">{total_riesgo_txt}<span style="font-size:10px;color:#999;"> / {RIESGO_MAX}</span></td>'
                 f'</tr></table>'
                 f'<div style="background:#e0e0e0;border-radius:3px;height:6px;margin-bottom:8px;">'
                 f'<div style="background:{hex_color};width:{fill_pct}%;height:6px;border-radius:3px;"></div></div>'

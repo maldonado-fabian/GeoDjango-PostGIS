@@ -27,6 +27,7 @@ urlpatterns = [
     ,path('evaluacion/<int:pk>/',views.detalle_evaluacion)
     ,path('evaluacion/crear/',views.crear_evaluacion)
     ,path('evaluacion/actualizar/<int:pk>/',views.actualizar_evaluacion)
+    ,path('evaluacion/inmueble/<int:pk>/crear-lote/',views.crear_evaluacion_lote)
 
     #Indicadores URLs
     ,path('indicadores/',views.lista_indicadores)

@@ -212,6 +212,10 @@
             <div class="ficha-body" id="panel-content"></div>
 
             <div class="ficha-foot" id="ficha-foot" hidden>
+                <button class="btn btn--primary btn--block" id="btn-evaluar-inmueble" hidden>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                    Iniciar evaluación
+                </button>
                 <button class="btn btn--primary btn--block" id="btn-editar-inmueble">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>
                     Editar datos
@@ -235,6 +239,29 @@
             </div>
             <div class="modal-body" id="clases-panel-content">
                 <p class="panel-placeholder">Cargando clases…</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===================== Panel de evaluación nueva (editor) ===================== -->
+    <div id="evaluar-panel" class="modal" hidden>
+        <div class="modal-backdrop" id="evaluar-backdrop"></div>
+        <div class="modal-card">
+            <div class="modal-head">
+                <div>
+                    <div class="kicker">Nueva evaluación</div>
+                    <h2 class="modal-title" id="evaluar-panel-title">Evaluar inmueble</h2>
+                </div>
+                <button class="icon-btn icon-btn--round" id="btn-cerrar-evaluar" title="Cerrar" aria-label="Cerrar">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div class="modal-body" id="evaluar-panel-content">
+                <p class="panel-placeholder">Cargando sub-indicadores…</p>
+            </div>
+            <div class="modal-foot" id="evaluar-panel-foot" hidden>
+                <div class="edit-feedback" id="evaluar-feedback"></div>
+                <button class="btn btn--primary btn--block" id="btn-guardar-evaluacion-lote" disabled>Guardar evaluación</button>
             </div>
         </div>
     </div>
