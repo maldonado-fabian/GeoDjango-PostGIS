@@ -58,6 +58,9 @@ urlpatterns = [
     # Crear KMZ con detalle completo por indicador
     ,path('crear-kml-detalle/', views.CrearKMLDetalleView.as_view(), name='crear-kml-detalle')
 
+    # Crear GeoJSON con detalle por indicador
+    ,path('crear-geojson-detalle/', views.CrearGeoJSONDetalleView.as_view(), name='crear-geojson-detalle')
+
     # Reporte PDF de resumen global (asíncrono con Celery)
     ,path('generar-pdf-resumen/', views.GenerarPDFResumenView.as_view(), name='generar-pdf-resumen')
     ,path('generar-pdf-resumen/estado/<str:task_id>/', views.EstadoPDFResumenView.as_view(), name='estado-pdf-resumen')

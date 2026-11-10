@@ -8,15 +8,32 @@ Todos son idempotentes.
 
 ## Orden de aplicación
 
+**`00_schema.sql` es nuevo (2026-09-08) y va primero, antes que `manage.py migrate`.**
+Hasta esa fecha, `amenazas`/`indicadores`/`sub_indicadores`/`clases`/`inmuebles` no
+tenían ningún `CREATE TABLE` versionado en ningún lado del repositorio — una
+instalación nueva no podía ni siquiera terminar de migrar (`0001_Evaluacion` falla
+con `relation "inmuebles" does not exist`, porque esa migración crea `evaluacion`
+con una FK hacia una tabla que nadie había creado). Encontrado y corregido durante
+la validación de portabilidad ISO/IEC 25010 de la memoria.
+
 | Archivo | Qué hace |
 |---|---|
-| *(no versionado)* | Catálogo de **Incendio**. Se pobló antes de que estos scripts existieran; la base ya lo tiene. |
+| `00_schema.sql` | `CREATE TABLE` de las 5 tablas de dominio. **Va antes que `manage.py migrate`.** |
+| `01_amenaza_incendio.sql` | Catálogo de **Incendio**: 4 indicadores, 19 sub-indicadores. |
 | `02_amenaza_sismo.sql` | Catálogo de **Sismo**: 6 indicadores, 19 sub-indicadores, 81 clases. |
 | `03_detalle_calculo.sql` | `postgisftw.detalle_calculo(amenaza_id, inmueble_id)`, la función que alimenta el mapa. Reemplaza a la vista `detalle_calculo_incendio`, que tenía la amenaza fija. |
 
 ```sh
 docker exec -i geodjango-docker-postgis-1 \
+  psql -U postgres -d GRD_Docker -v ON_ERROR_STOP=1 < sql/00_schema.sql
+
+docker exec -i geodjango-docker-postgis-1 \
+  psql -U postgres -d GRD_Docker -v ON_ERROR_STOP=1 < sql/01_amenaza_incendio.sql
+
+docker exec -i geodjango-docker-postgis-1 \
   psql -U postgres -d GRD_Docker -v ON_ERROR_STOP=1 < sql/02_amenaza_sismo.sql
+
+# recién acá: manage.py migrate (crea `evaluacion`, ya con inmuebles/sub_indicadores existiendo)
 
 docker exec -i geodjango-docker-postgis-1 \
   psql -U postgres -d GRD_Docker -v ON_ERROR_STOP=1 < sql/03_detalle_calculo.sql
@@ -24,6 +41,13 @@ docker exec -i geodjango-docker-postgis-1 \
 # pg_featureserv cachea el catálogo al arrancar
 docker restart pg_featureserv
 ```
+
+También hacía falta `src/geodjango/geodjango/.env` (no versionado, sin
+`.env.example` hasta ahora — copiar `.env.example` del mismo directorio) y correr
+`manage.py create_roles` a mano; `docker-compose.yml` ya encadena `migrate` +
+`create_roles` antes de `runserver`, pero eso no cubre este archivo ni los de
+`sql/*_amenaza_*.sql`, que siguen sin automatizarse (ver nota de cabecera de este
+mismo README sobre por qué van fuera de las migraciones de Django).
 
 ## Cargar las evaluaciones de una amenaza
 

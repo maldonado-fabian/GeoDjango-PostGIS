@@ -107,6 +107,10 @@
             </div>
 
             <div class="topbar-actions">
+                <button class="icon-btn icon-btn--round" id="btn-ayuda" title="Cómo leer los números" aria-label="Cómo leer los números">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+                </button>
+
                 <div class="menu-wrap">
                     <button class="btn btn--ghost" id="btn-export" aria-haspopup="true" aria-expanded="false">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
@@ -115,13 +119,22 @@
                     <div class="menu" id="export-menu" hidden>
                         <button class="menu-item" id="btn-descargar-kml">
                             <span class="menu-item-title">KML</span>
-                            <span class="menu-item-sub">Detalle por indicador · Google Earth</span>
+                            <span class="menu-item-sub">Detalle por indicador primario · Google Earth</span>
+                        </button>
+                        <button class="menu-item" id="btn-descargar-geojson">
+                            <span class="menu-item-title">GeoJSON</span>
+                            <span class="menu-item-sub">Datos por indicador · QGIS y otros SIG</span>
                         </button>
                         <button class="menu-item" id="btn-descargar-pdf">
                             <span class="menu-item-title">Informe PDF</span>
                             <span class="menu-item-sub">Resultados, distribución y factores de riesgo</span>
                         </button>
                     </div>
+                </div>
+
+                <div class="segmented modo-toggle" id="modo-toggle" role="tablist" aria-label="Modo de edición" hidden>
+                    <button type="button" class="segmented-opt is-active" data-modo="edicion" role="tab" aria-selected="true">Edición</button>
+                    <button type="button" class="segmented-opt" data-modo="simulacion" role="tab" aria-selected="false">Simulación</button>
                 </div>
 
                 <div class="menu-wrap">
@@ -148,21 +161,12 @@
                 <h2 class="panel-title" id="amenaza-titulo">—</h2>
                 <div class="segmented" id="vista-segmented" role="tablist">
                     <button type="button" class="segmented-opt is-active" data-vista="total" role="tab" aria-selected="true">Riesgo total</button>
-                    <button type="button" class="segmented-opt" data-vista="indicador" role="tab" aria-selected="false">Por indicador</button>
+                    <button type="button" class="segmented-opt" data-vista="indicador" role="tab" aria-selected="false">Indicador primario</button>
                 </div>
             </div>
 
             <div class="panel-body" id="indicadores-container">
-                <p class="panel-placeholder">Cargando indicadores…</p>
-            </div>
-
-            <div class="ponderadores-card" id="ponderadores-card" hidden>
-                <div class="ponderadores-head">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="20" cy="14" r="2"/></svg>
-                    Ponderadores
-                </div>
-                <p class="ponderadores-text">Pesos y clases definidos por la unidad técnica. La edición afecta el cálculo de todos los inmuebles.</p>
-                <button class="btn btn--deep" id="btn-administrar-clases">Administrar clases</button>
+                <p class="panel-placeholder">Cargando indicadores primarios…</p>
             </div>
         </aside>
 
@@ -171,12 +175,21 @@
             <div id="map"></div>
 
             <div class="legend-card" id="legend-card">
-                <div class="legend-head">
-                    <span class="legend-title">Nivel de riesgo</span>
-                    <span class="legend-total" id="legend-total">—</span>
+                <div class="legend-head" id="legend-head">
+                    <span class="legend-head-titles">
+                        <span class="legend-title" id="legend-kicker">Nivel de riesgo</span>
+                        <span class="legend-subtitle" id="legend-subtitle" hidden></span>
+                    </span>
+                    <span class="legend-head-right">
+                        <span class="legend-total" id="legend-total">—</span>
+                        <span class="legend-toggle" id="legend-toggle" aria-hidden="true">▼</span>
+                    </span>
                 </div>
-                <div id="legend-rows"></div>
-                <div class="legend-foot" id="legend-foot">Suma ponderada de indicadores, escala 0–4.</div>
+                <div class="legend-body" id="legend-body">
+                    <div class="legend-doughnut" id="legend-doughnut"></div>
+                    <div id="legend-rows"></div>
+                    <div class="legend-foot" id="legend-foot">Suma ponderada de indicadores primarios, escala 0–4.</div>
+                </div>
             </div>
 
             <div class="map-controls">
@@ -190,6 +203,17 @@
                     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
                 </button>
             </div>
+
+            <!-- TEMP: solo para sacar capturas, quitar este bloque después.
+                 Invisibles a propósito (opacity:0, siguen ocupando su lugar y
+                 respondiendo al clic) para no salir en las fotos. Quedan justo
+                 debajo de los controles de zoom/centrar: primero el botón que
+                 oculta las figuras, debajo el que quita el color. -->
+            <div class="map-controls" style="top: 190px; bottom: auto;">
+                <button class="map-ctrl" id="btn-temp-toggle-figuras" title="TEMP: ocultar/mostrar figuras" aria-label="Ocultar figuras" style="opacity: 0; width: auto; padding: 0 8px;">FIG</button>
+                <button class="map-ctrl" id="btn-temp-toggle-color" title="TEMP: quitar/poner color" aria-label="Quitar color" style="opacity: 0; width: auto; padding: 0 8px;">COLOR</button>
+            </div>
+            <!-- /TEMP -->
 
             <div class="scale-pill">© OpenStreetMap · CARTO</div>
         </main>
@@ -224,21 +248,43 @@
         </aside>
     </div>
 
-    <!-- ===================== Panel de clases (editor) ===================== -->
-    <div id="clases-panel" class="modal" hidden>
-        <div class="modal-backdrop" id="clases-backdrop"></div>
+    <!-- ===================== Guía rápida: cómo leer los números ===================== -->
+    <div id="ayuda-panel" class="modal" hidden>
+        <div class="modal-backdrop" id="ayuda-backdrop"></div>
         <div class="modal-card">
             <div class="modal-head">
                 <div>
-                    <div class="kicker">Ponderadores</div>
-                    <h2 class="modal-title">Administrar clases</h2>
+                    <div class="kicker">Guía rápida</div>
+                    <h2 class="modal-title">Cómo leer los números</h2>
                 </div>
-                <button class="icon-btn icon-btn--round" id="btn-cerrar-clases" title="Cerrar" aria-label="Cerrar">
+                <button class="icon-btn icon-btn--round" id="btn-cerrar-ayuda" title="Cerrar" aria-label="Cerrar">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                 </button>
             </div>
-            <div class="modal-body" id="clases-panel-content">
-                <p class="panel-placeholder">Cargando clases…</p>
+            <div class="modal-body">
+                <div class="ayuda-section">
+                    <h3>Índice de riesgo (0 a 4)</h3>
+                    <p>Es el número grande de la ficha de un inmueble (por ejemplo «2,87»). Resume en una sola cifra qué tan expuesto está ese inmueble a la amenaza activa, sumando el aporte de todos sus indicadores primarios evaluados. Se clasifica en cinco niveles:</p>
+                    <div class="ayuda-niveles" id="ayuda-niveles"></div>
+                </div>
+                <div class="ayuda-section">
+                    <h3>Indicador primario y su «peso»</h3>
+                    <p>Cada indicador primario (por ejemplo «Sistema constructivo») es una categoría amplia del riesgo. Su peso es un porcentaje fijo, definido por la metodología, que indica cuánto puede llegar a influir esa categoría en el índice total — es el mismo para todos los inmuebles, no cambia según el caso.</p>
+                </div>
+                <div class="ayuda-section">
+                    <h3>Indicador secundario y su clase</h3>
+                    <p>Dentro de cada indicador primario hay uno o más indicadores secundarios (por ejemplo «Materialidad estructural»), evaluados asignándoles una clase (por ejemplo «Concreto armado»). Cada clase tiene un valor de 1 a 4: ese valor, multiplicado por el peso del indicador secundario y el de su indicador primario, es lo que efectivamente suma al índice total.</p>
+                </div>
+                <div class="ayuda-section">
+                    <h3>«% del total»</h3>
+                    <p>Este porcentaje aparece en dos lugares con significados distintos:</p>
+                    <p><strong>En la ficha de un inmueble:</strong> qué parte del índice de ese inmueble puntual explica cada indicador — sirve para ver qué factor pesó más en ese caso.</p>
+                    <p><strong>En el panel izquierdo «Composición del riesgo»:</strong> un promedio sobre todos los inmuebles catastrados que ves en el mapa — sirve para ver qué factor domina el perfil de riesgo del territorio, no de un inmueble en particular.</p>
+                </div>
+                <div class="ayuda-section">
+                    <h3>Leyenda y gráfico del mapa</h3>
+                    <p>La tarjeta «Nivel de riesgo» (abajo a la izquierda del mapa) cuenta cuántos inmuebles catastrados caen en cada nivel, incluidos los que todavía no tienen evaluación. Al elegir «Indicador primario» en el panel izquierdo, tanto el mapa como esta tarjeta dejan de mostrar el índice total y pasan a mostrar el aporte de ese factor puntual.</p>
+                </div>
             </div>
         </div>
     </div>
@@ -257,7 +303,7 @@
                 </button>
             </div>
             <div class="modal-body" id="evaluar-panel-content">
-                <p class="panel-placeholder">Cargando sub-indicadores…</p>
+                <p class="panel-placeholder">Cargando indicadores secundarios…</p>
             </div>
             <div class="modal-foot" id="evaluar-panel-foot" hidden>
                 <div class="edit-feedback" id="evaluar-feedback"></div>

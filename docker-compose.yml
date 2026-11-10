@@ -36,6 +36,18 @@ services:
       POSTGRES_DB: GRD_Docker
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: izipizi123
+      # DATABASE_* (no POSTGRES_*) es lo que lee settings.py y api/reports/queries.py
+      # -hallazgo de la validación de portabilidad, 2026-09-08: sin esto, Django
+      # falla con "settings.DATABASES is improperly configured" y el reporte PDF
+      # falla por separado en su propia conexión SQLAlchemy. Duplicado a propósito
+      # con las POSTGRES_* de arriba en vez de reemplazarlas, porque pg_tileserv.env
+      # / pg_featureserv.env están escritos en términos de POSTGRES_*.
+      DATABASE_ENGINE: django.contrib.gis.db.backends.postgis
+      DATABASE_HOST: postgis
+      DATABASE_PORT: 5432
+      DATABASE_NAME: GRD_Docker
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: izipizi123
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
@@ -43,8 +55,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    # migrate + create_roles antes de runserver: hallazgo de la validación de
+    # portabilidad (2026-09-08) — antes había que correrlos a mano, y
+    # "migrate" ni siquiera aparecía documentado en ningún lado. Sigue sin
+    # cubrir sql/00_schema.sql ni sql/*_amenaza_*.sql (esos no son de Django,
+    # ver sql/README.md) ni la carga de inmuebles/evaluaciones.
     command: >
-      sh -c "python3 src/geodjango/manage.py runserver 0.0.0.0:8000"
+      sh -c "python3 src/geodjango/manage.py migrate &&
+             python3 src/geodjango/manage.py create_roles &&
+             python3 src/geodjango/manage.py ensure_admin &&
+             python3 src/geodjango/manage.py runserver 0.0.0.0:8000"
 
   celery:
     build: .
@@ -56,6 +76,18 @@ services:
       POSTGRES_DB: GRD_Docker
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: izipizi123
+      # DATABASE_* (no POSTGRES_*) es lo que lee settings.py y api/reports/queries.py
+      # -hallazgo de la validación de portabilidad, 2026-09-08: sin esto, Django
+      # falla con "settings.DATABASES is improperly configured" y el reporte PDF
+      # falla por separado en su propia conexión SQLAlchemy. Duplicado a propósito
+      # con las POSTGRES_* de arriba en vez de reemplazarlas, porque pg_tileserv.env
+      # / pg_featureserv.env están escritos en términos de POSTGRES_*.
+      DATABASE_ENGINE: django.contrib.gis.db.backends.postgis
+      DATABASE_HOST: postgis
+      DATABASE_PORT: 5432
+      DATABASE_NAME: GRD_Docker
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: izipizi123
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
@@ -68,7 +100,12 @@ services:
 
   pg_tileserv:
     image: pramsey/pg_tileserv:latest
-    container_name: pg_tileserv
+    # Sin container_name fijo: hallazgo de la validación de portabilidad
+    # (2026-09-08) — un nombre literal (antes "pg_tileserv") es único a nivel
+    # de todo el daemon Docker, no por proyecto, así que impedía tener dos
+    # instancias de este stack en la misma máquina, incluso en directorios
+    # distintos. Sin esta línea, Compose genera un nombre con el prefijo del
+    # proyecto, igual que ya hace para django/celery/postgis/redis.
     env_file:
       - pg_tileserv.env
     depends_on:
@@ -79,7 +116,6 @@ services:
   
   pg_fetureserv:
     image: pramsey/pg_featureserv:latest
-    container_name: pg_featureserv
     env_file:
       - pg_featureserv.env
     depends_on:

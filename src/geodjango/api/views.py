@@ -769,7 +769,7 @@ class CrearKMLDetalleView(APIView):
                 f'</tr></table>'
                 f'<div style="background:#e0e0e0;border-radius:3px;height:6px;margin-bottom:8px;">'
                 f'<div style="background:{hex_color};width:{fill_pct}%;height:6px;border-radius:3px;"></div></div>'
-                f'<div style="font-size:10px;font-weight:bold;color:#333;margin-bottom:4px;border-bottom:1px solid #eee;padding-bottom:3px;">Indicadores</div>'
+                f'<div style="font-size:10px;font-weight:bold;color:#333;margin-bottom:4px;border-bottom:1px solid #eee;padding-bottom:3px;">Indicadores primarios</div>'
                 f'<table style="width:100%;border-collapse:collapse;">{indicadores_html}</table>'
                 f'<div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee;">'
                 f'<div style="font-size:9px;color:#aaa;">Datos actualizados por ultima vez {timestamp}</div>'
@@ -802,6 +802,98 @@ class CrearKMLDetalleView(APIView):
                 nombre = amenaza.replace(' ', '_') or 'Riesgo'
                 response['Content-Disposition'] = f'attachment; filename="{nombre}_Detalle.kml"'
                 return response
+
+
+class CrearGeoJSONDetalleView(APIView):
+    """Exporta el detalle de riesgo por inmueble como GeoJSON (RFC 7946, WGS84).
+
+    Mismos datos que el KML de detalle, pero como atributos y no como HTML. Incluye
+    las propiedades de `simplestyle-spec` (`fill`, `stroke`, `marker-color`) para
+    que visores como geojson.io lo pinten por nivel; QGIS las ignora.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import json
+        from datetime import datetime
+        from shapely.geometry import mapping
+
+        con = _engine()
+        amenaza_id = amenaza_id_de(request, AMENAZA_POR_DEFECTO)
+        amenaza = nombre_amenaza(amenaza_id)
+
+        sql = f"""
+        SELECT id, geom, direccion, rol_sii, manzana, predio, detalle_riesgo
+        FROM postgisftw.detalle_calculo({int(amenaza_id)})
+        """
+        gdf = gpd.read_postgis(sql, con, geom_col='geom').to_crs(epsg=4326)
+
+        def limpio(valor):
+            """None para NaN, que no es JSON válido; el resto pasa igual."""
+            return None if pd.isna(valor) else valor
+
+        features = []
+        for _, row in gdf.iterrows():
+            geom = row['geom']
+            if geom is None or geom.is_empty:
+                continue
+            detalle = row['detalle_riesgo']
+            if isinstance(detalle, str):
+                detalle = json.loads(detalle)
+
+            indicadores = [
+                {
+                    'nombre': ind.get('indicador_nombre'),
+                    'riesgo': round(ind.get('riesgo_indicador') or 0, 2),
+                }
+                for ind in (detalle.get('indicadores') or [])
+            ]
+            if indicadores:
+                total = round(sum(i['riesgo'] for i in indicadores), 2)
+                nivel = riesgo.nivel_por_indice(total)
+            else:
+                total = None
+                nivel = riesgo.NO_EVALUADO
+
+            props = {
+                'id': int(row['id']),
+                'direccion': limpio(row['direccion']),
+                'rol_sii': limpio(row['rol_sii']),
+                'manzana': limpio(row['manzana']),
+                'predio': limpio(row['predio']),
+                'amenaza': amenaza,
+                'indice_riesgo': total,
+                'indice_max': RIESGO_MAX,
+                'nivel': nivel.label,
+                'color': nivel.color,
+                'indicadores': indicadores,
+                # simplestyle-spec
+                'fill': nivel.color,
+                'fill-opacity': 0.7,
+                'stroke': '#888888',
+                'stroke-width': 1,
+                'marker-color': nivel.color,
+            }
+            features.append({
+                'type': 'Feature',
+                'id': props['id'],
+                'geometry': mapping(geom),
+                'properties': props,
+            })
+
+        coleccion = {
+            'type': 'FeatureCollection',
+            'name': f'Riesgo de {amenaza}',
+            'generado': datetime.now().isoformat(timespec='seconds'),
+            'features': features,
+        }
+        nombre = amenaza.replace(' ', '_') or 'Riesgo'
+        response = HttpResponse(
+            json.dumps(coleccion, ensure_ascii=False),
+            content_type='application/geo+json',
+        )
+        response['Content-Disposition'] = f'attachment; filename="{nombre}_Detalle.geojson"'
+        return response
 
 
 # ── Reporte PDF (resumen global) — generación asíncrona con Celery ────────────

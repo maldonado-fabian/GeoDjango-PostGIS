@@ -44,10 +44,10 @@ const NIVELES = [
 
 // Escala por indicador / sub-indicador (valores ~0–1, no 0–4)
 const NIVELES_PARCIAL = [
-  { key: 'muyalto', label: 'Muy alto', fill: '#ff0000', fg: '#c20000', tint: '#ffe5e5', min: 1.0 },
-  { key: 'alto',    label: 'Alto',     fill: '#ff6600', fg: '#a33f00', tint: '#ffece0', min: 0.5 },
-  { key: 'medio',   label: 'Medio',    fill: '#ffff00', fg: '#75690a', tint: '#fbf7cc', min: 0.25 },
-  { key: 'bajo',    label: 'Bajo',     fill: '#00aa00', fg: '#00752b', tint: '#e2f5e2', min: -Infinity }
+  { key: 'muyalto', label: 'Muy alto', fill: '#ff0000', fg: '#c20000', tint: '#ffe5e5', min: 1.0,       rango: '≥ 1,00' },
+  { key: 'alto',    label: 'Alto',     fill: '#ff6600', fg: '#a33f00', tint: '#ffece0', min: 0.5,       rango: '0,50 – 0,99' },
+  { key: 'medio',   label: 'Medio',    fill: '#ffff00', fg: '#75690a', tint: '#fbf7cc', min: 0.25,      rango: '0,25 – 0,49' },
+  { key: 'bajo',    label: 'Bajo',     fill: '#00aa00', fg: '#00752b', tint: '#e2f5e2', min: -Infinity, rango: '< 0,25' }
 ];
 
 // "Sin evaluar": no es un nivel de riesgo (no tiene rango en la escala 0-4),
@@ -111,6 +111,21 @@ function sinEvaluar(feature) {
   return propsDetalle(feature).indicadores == null;
 }
 
+/** Aporte ponderado de un indicador puntual al índice total (mismo dato que colorea indicadorLayer). */
+function valorIndicadorDe(feature, nombre) {
+  const ind = (propsDetalle(feature).indicadores || []).find(i => i.indicador_nombre === nombre);
+  return ind?.riesgo_indicador || 0;
+}
+
+/** Aporte ponderado de un sub-indicador puntual al índice total. */
+function valorSubindicadorDe(feature, nombre) {
+  for (const ind of propsDetalle(feature).indicadores || []) {
+    const sub = (ind.sub_indicadores || []).find(s => s.sub_indicador_nombre === nombre);
+    if (sub) return sub.riesgo_subindicador || 0;
+  }
+  return 0;
+}
+
 // =============================================================================
 // ESTADO
 // =============================================================================
@@ -124,7 +139,11 @@ const state = {
   inmuebleSeleccionado: null,
   distribucion: [],
   clasesPorSub: {},
-  evaluacionesActuales: {}
+  evaluacionesActuales: {},
+  // Modo simulación (editor): cambios de clase que no se guardan en la base.
+  // `inmuebleId`/`original`/`cambios` describen la única hipótesis activa a
+  // la vez — editar otro inmueble mientras se simula descarta la anterior.
+  simulacion: { activo: false, inmuebleId: null, original: null, cambios: {} }
 };
 
 // =============================================================================
@@ -205,11 +224,20 @@ const baseLayer = new TileLayer({
 });
 
 /** Estilo por nivel: relleno con alfa + borde blanco fino (según diseño). */
-function estiloPorValor(valor, escala) {
+/** true si `feature` es el único inmueble con una hipótesis de simulación activa. */
+function esSimulado(feature) {
+  return state.simulacion.inmuebleId != null && feature.get('id') === state.simulacion.inmuebleId;
+}
+
+function estiloPorValor(valor, escala, simulado = false) {
   const nivel = escala === 'total' ? nivelTotal(valor) : nivelParcial(valor);
   return new Style({
     fill: new Fill({ color: nivel.fill + '99' }),
-    stroke: new Stroke({ color: '#ffffff', width: 1 })
+    // Borde punteado ámbar: el relleno es una hipótesis, no lo que hay
+    // guardado en la base — mismo color que el resto de la UI de simulación.
+    stroke: simulado
+      ? new Stroke({ color: '#a33f00', width: 2, lineDash: [3, 2] })
+      : new Stroke({ color: '#ffffff', width: 1 })
   });
 }
 
@@ -222,7 +250,7 @@ const estiloSinEvaluar = new Style({
 /** Vista general: color por índice de riesgo total del inmueble. */
 const estiloTotal = feature => sinEvaluar(feature)
   ? estiloSinEvaluar
-  : estiloPorValor(riesgoTotalDe(propsDetalle(feature)), 'total');
+  : estiloPorValor(riesgoTotalDe(propsDetalle(feature)), 'total', esSimulado(feature));
 
 const geojsonSource = new VectorSource({
   format: new GeoJSON(),
@@ -343,7 +371,111 @@ function pintarUsuario() {
   document.getElementById('user-avatar').textContent = iniciales(state.username);
   document.getElementById('user-chip-name').textContent = state.username || '—';
   document.getElementById('user-chip-role').textContent = state.role === 'editor' ? 'Editor' : 'Observador';
-  document.getElementById('ponderadores-card').hidden = state.role !== 'editor';
+  pintarModoToggle();
+}
+
+// =============================================================================
+// MODO SIMULACIÓN — editor: previsualizar sin guardar
+// =============================================================================
+
+const modoToggle = document.getElementById('modo-toggle');
+modoToggle.querySelectorAll('.segmented-opt').forEach(btn => {
+  btn.addEventListener('click', () => establecerModoSimulacion(btn.dataset.modo === 'simulacion'));
+});
+
+function pintarModoToggle() {
+  modoToggle.hidden = state.role !== 'editor';
+  modoToggle.querySelectorAll('.segmented-opt').forEach(b => {
+    const activo = (b.dataset.modo === 'simulacion') === state.simulacion.activo;
+    b.classList.toggle('is-active', activo);
+    b.setAttribute('aria-selected', String(activo));
+  });
+}
+
+function establecerModoSimulacion(activo) {
+  if (activo === state.simulacion.activo) return;
+  if (!activo) revertirSimulacion();
+  state.simulacion.activo = activo;
+  pintarModoToggle();
+  toast(
+    activo
+      ? 'Modo simulación: los cambios que hagas no se guardan.'
+      : 'Modo edición: los cambios que hagas se guardan de inmediato.'
+  );
+}
+
+/** Descarta la hipótesis activa (si hay una) y devuelve el inmueble a sus valores reales. */
+function revertirSimulacion() {
+  const { inmuebleId, original } = state.simulacion;
+  if (inmuebleId != null && original) {
+    const feature = geojsonSource.getFeatures().find(f => f.get('id') === inmuebleId);
+    if (feature) {
+      feature.set('detalle_riesgo', original);
+      geojsonSource.changed();
+      geojsonLayer.changed();
+      indicadorLayer.changed();
+      renderizarIndicadores();
+      pintarLeyenda();
+      if (state.inmuebleSeleccionado?.id === inmuebleId) mostrarFichaInmueble(feature);
+    }
+  }
+  state.simulacion.inmuebleId = null;
+  state.simulacion.original = null;
+  state.simulacion.cambios = {};
+}
+
+/**
+ * Recalcula `detalle_riesgo` en el cliente con el nuevo valor de un
+ * indicador secundario, sin tocar el backend. Reutiliza los mismos pesos que
+ * ya vienen en la feature (peso_subindicador, peso del indicador) para
+ * reproducir exactamente la fórmula de `postgisftw.detalle_calculo`.
+ */
+function simularEvaluacion(subId, valorNuevo) {
+  const inmuebleId = state.inmuebleSeleccionado?.id;
+  if (inmuebleId == null) return;
+  const feature = geojsonSource.getFeatures().find(f => f.get('id') === inmuebleId);
+  if (!feature) return;
+
+  // Solo hay una hipótesis activa a la vez: editar otro inmueble descarta la anterior.
+  if (state.simulacion.inmuebleId != null && state.simulacion.inmuebleId !== inmuebleId) {
+    revertirSimulacion();
+  }
+  if (state.simulacion.inmuebleId == null) {
+    state.simulacion.inmuebleId = inmuebleId;
+    state.simulacion.original = JSON.parse(JSON.stringify(feature.get('detalle_riesgo')));
+    state.simulacion.cambios = {};
+  }
+  state.simulacion.cambios[subId] = valorNuevo;
+
+  const detalle = JSON.parse(JSON.stringify(feature.get('detalle_riesgo')));
+  const clasesDelSub = state.clasesPorSub[subId] || [];
+  const claseTxt = clasesDelSub.filter(c => c.valor === valorNuevo).map(c => c.nombre).join(' / ') || null;
+
+  (detalle.indicadores || []).forEach(ind => {
+    let cambiado = false;
+    (ind.sub_indicadores || []).forEach(sub => {
+      if (sub.sub_indicador_id === subId) {
+        sub.valor = valorNuevo;
+        sub.clase = claseTxt;
+        sub.riesgo_subindicador = valorNuevo * sub.peso_subindicador;
+        sub.riesgo_subindicador_ponderado = sub.riesgo_subindicador * ind.peso;
+        cambiado = true;
+      }
+    });
+    if (cambiado) {
+      ind.riesgo_indicador = (ind.sub_indicadores || [])
+        .reduce((s, sub) => s + (sub.riesgo_subindicador_ponderado || 0), 0);
+    }
+  });
+
+  feature.set('detalle_riesgo', detalle);
+  geojsonSource.changed();
+  geojsonLayer.changed();
+  indicadorLayer.changed();
+  renderizarIndicadores();
+  pintarLeyenda();
+  mostrarFichaInmueble(feature);
+  toast('Cambio simulado: no se guardó en la base de datos.');
 }
 
 document.getElementById('login-form').addEventListener('submit', async function (e) {
@@ -393,6 +525,7 @@ document.getElementById('btn-logout').addEventListener('click', () => {
   clearAuth();
   state.role = 'viewer';
   state.username = '';
+  state.simulacion = { activo: false, inmuebleId: null, original: null, cambios: {} };
   cerrarFicha();
   cerrarMenus();
   geojsonSource.clear();
@@ -448,6 +581,12 @@ function seleccionarAmenaza(id) {
   pintarTituloAmenaza();
   volverVistaGeneral();
   cerrarFicha();
+  // Los indicadores/sub-indicadores de la amenaza anterior no existen en la
+  // nueva: cualquier hipótesis de simulación pendiente pierde sentido acá
+  // (el modo simulación en sí, `state.simulacion.activo`, se mantiene).
+  state.simulacion.inmuebleId = null;
+  state.simulacion.original = null;
+  state.simulacion.cambios = {};
   // El detalle de riesgo es por amenaza: hay que traer el GeoJSON de nuevo.
   // `refresh()` limpia la fuente y vuelve a invocar el loader, que lee
   // state.amenazaActiva — ya actualizado más arriba.
@@ -462,24 +601,113 @@ function pintarTituloAmenaza() {
 // CONTEXTO TERRITORIAL + LEYENDA
 // =============================================================================
 
+/**
+ * Distribución de inmuebles por nivel, para la leyenda/doughnut. Sigue a
+ * `state.vista`: en 'total' clasifica por el índice completo (escala 0–4);
+ * en 'indicador'/'subindicador' clasifica por el aporte de ese factor puntual
+ * (escala parcial) — el mismo valor que ya colorea `indicadorLayer`, para que
+ * la leyenda nunca describa algo distinto de lo que se ve pintado en el mapa.
+ */
 function calcularDistribucion() {
+  const { tipo, nombre } = state.vista;
   const features = geojsonSource.getFeatures();
   const conteo = { muyalto: 0, alto: 0, medio: 0, bajo: 0, noeval: 0 };
+
   features.forEach(f => {
     if (sinEvaluar(f)) { conteo.noeval++; return; }
-    const nivel = nivelTotal(riesgoTotalDe(propsDetalle(f)));
+    const valor = tipo === 'total' ? riesgoTotalDe(propsDetalle(f))
+                : tipo === 'indicador' ? valorIndicadorDe(f, nombre)
+                : valorSubindicadorDe(f, nombre);
+    const nivel = tipo === 'total' ? nivelTotal(valor) : nivelParcial(valor);
     conteo[nivel.key]++;
   });
-  state.distribucion = [...NIVELES, NO_EVALUADO].map(n => ({ ...n, cantidad: conteo[n.key] }));
+
+  const niveles = tipo === 'total' ? NIVELES : NIVELES_PARCIAL;
+  state.distribucion = [...niveles, NO_EVALUADO].map(n => ({ ...n, cantidad: conteo[n.key] }));
   return state.distribucion;
+}
+
+/**
+ * Doughnut en SVG puro: un <circle> por nivel con stroke-dasharray/-dashoffset
+ * acumulado. El rediseño de la consola sacó Chart.js a propósito (ver commit
+ * "Rediseño del front a consola GRD") para no depender de un CDN externo, así
+ * que esto reconstruye la misma idea visual sin reintroducir esa dependencia.
+ */
+const DOUGHNUT_R = 40;
+const DOUGHNUT_CIRCUNFERENCIA = 2 * Math.PI * DOUGHNUT_R;
+
+/**
+ * Un <circle> fijo por nivel (mismo orden y colores en escala total o
+ * parcial), creado una sola vez. Las llamadas siguientes solo actualizan
+ * stroke-dasharray/-dashoffset en esos mismos elementos —nunca se
+ * reconstruye el SVG— para que la transición CSS tenga un valor anterior del
+ * que partir y anime al cambiar de amenaza, vista o al evaluar un inmueble.
+ */
+function renderizarDoughnut(filas, total) {
+  const cont = document.getElementById('legend-doughnut');
+  let svg = cont.querySelector('svg');
+  let esNuevo = false;
+
+  if (!svg) {
+    esNuevo = true;
+    cont.innerHTML = `
+      <svg viewBox="0 0 100 100">
+        ${filas.map(f => `<circle data-nivel="${f.key}" cx="50" cy="50" r="${DOUGHNUT_R}" fill="none"
+          stroke="${f.fill}" stroke-width="16"
+          stroke-dasharray="0 ${DOUGHNUT_CIRCUNFERENCIA}"></circle>`).join('')}
+      </svg>
+      <div class="legend-doughnut-center">
+        <span class="legend-doughnut-value" id="legend-doughnut-value"></span>
+        <span class="legend-doughnut-label" id="legend-doughnut-label"></span>
+      </div>`;
+    svg = cont.querySelector('svg');
+  }
+
+  const aplicarValores = () => {
+    let acumulado = 0;
+    filas.forEach(f => {
+      const largo = total ? (f.cantidad / total) * DOUGHNUT_CIRCUNFERENCIA : 0;
+      const circle = svg.querySelector(`circle[data-nivel="${f.key}"]`);
+      circle.setAttribute('stroke-dasharray', `${largo} ${DOUGHNUT_CIRCUNFERENCIA - largo}`);
+      circle.setAttribute('stroke-dashoffset', String(-acumulado));
+      acumulado += largo;
+    });
+  };
+
+  if (esNuevo) {
+    // Los círculos recién creados están en dasharray=0: forzar el layout acá
+    // y aplicar los valores reales en el siguiente frame, o el navegador no
+    // tiene un "antes" del que animar y salta directo al valor final.
+    svg.getBoundingClientRect();
+    requestAnimationFrame(aplicarValores);
+  } else {
+    aplicarValores();
+  }
+
+  document.getElementById('legend-doughnut-value').textContent = total;
+  document.getElementById('legend-doughnut-label').textContent = total === 1 ? 'inmueble' : 'inmuebles';
 }
 
 function pintarLeyenda() {
   const filas = calcularDistribucion();
   const total = filas.reduce((s, f) => s + f.cantidad, 0);
+  const { tipo, nombre } = state.vista;
+
+  const kicker = document.getElementById('legend-kicker');
+  const subtitulo = document.getElementById('legend-subtitle');
+  if (tipo === 'total') {
+    kicker.textContent = 'Nivel de riesgo';
+    subtitulo.hidden = true;
+  } else {
+    kicker.textContent = tipo === 'indicador' ? 'Por indicador primario' : 'Por indicador secundario';
+    subtitulo.textContent = nombre || '';
+    subtitulo.hidden = false;
+  }
 
   document.getElementById('legend-total').textContent =
     total === 1 ? '1 inmueble' : `${total} inmuebles`;
+
+  renderizarDoughnut(filas, total);
 
   document.getElementById('legend-rows').innerHTML = filas.map(f => `
     <div class="legend-row">
@@ -490,10 +718,15 @@ function pintarLeyenda() {
     </div>
   `).join('');
 
-  const nInd = contarIndicadores();
-  document.getElementById('legend-foot').textContent = nInd
-    ? `Suma ponderada de ${nInd} ${nInd === 1 ? 'indicador' : 'indicadores'}, escala 0–${RIESGO_MAX}.`
-    : `Escala de riesgo 0–${RIESGO_MAX}.`;
+  if (tipo === 'total') {
+    const nInd = contarIndicadores();
+    document.getElementById('legend-foot').textContent = nInd
+      ? `Suma ponderada de ${nInd} ${nInd === 1 ? 'indicador primario' : 'indicadores primarios'}, escala 0–${RIESGO_MAX}.`
+      : `Escala de riesgo 0–${RIESGO_MAX}.`;
+  } else {
+    document.getElementById('legend-foot').textContent =
+      `Aporte ponderado de "${nombre}" al índice total, no el índice completo del inmueble.`;
+  }
 
   document.getElementById('contexto-territorial').textContent =
     `${state.amenazaActiva?.nombre || 'Riesgo'} · ${total} inmuebles catastrados`;
@@ -546,7 +779,7 @@ function renderizarIndicadores() {
   const lista = agregarIndicadores();
 
   if (!lista.length) {
-    cont.innerHTML = '<p class="panel-placeholder">No hay indicadores disponibles.</p>';
+    cont.innerHTML = '<p class="panel-placeholder">No hay indicadores primarios disponibles.</p>';
     return;
   }
 
@@ -566,7 +799,7 @@ function renderizarIndicadores() {
                     <span class="subindicador-riesgo" style="color:${sn.fg}">${num(s.promedio)}</span>
                   </div>`;
         }).join('')
-      : '<p class="panel-placeholder">Sin sub-indicadores.</p>';
+      : '<p class="panel-placeholder">Sin indicadores secundarios.</p>';
 
     return `
       <div class="indicador-item">
@@ -579,7 +812,7 @@ function renderizarIndicadores() {
           </div>
           <div class="bar-track"><div class="bar-fill" style="width:${ancho}%;background:${nivel.fill}"></div></div>
           <div class="indicador-foot">
-            <span>${nSubs} ${nSubs === 1 ? 'sub-indicador' : 'sub-indicadores'}</span>
+            <span>${nSubs} ${nSubs === 1 ? 'indicador secundario' : 'indicadores secundarios'}</span>
             <span>${Math.round(ind.aporte)}% del total</span>
           </div>
         </div>
@@ -606,11 +839,14 @@ function renderizarIndicadores() {
   });
 }
 
-// ---- Segmentado Riesgo total / Por indicador ----
-document.querySelectorAll('.segmented-opt').forEach(btn => {
+// ---- Segmentado Riesgo total / Indicador primario ----
+// Acotado a #vista-segmented: .segmented-opt también la usa el toggle de
+// modo (Edición/Simulación) en la barra superior, y un selector global acá
+// terminaba enganchando esos botones y disparando esta lógica por error.
+document.querySelectorAll('#vista-segmented .segmented-opt').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.dataset.vista === 'total') { volverVistaGeneral(); return; }
-    // "Por indicador": si aún no hay uno elegido, entra al primero de la lista
+    // "Indicador primario": si aún no hay uno elegido, entra al primero de la lista
     if (state.vista.tipo === 'total') {
       const primero = document.querySelector('.indicador-header');
       if (primero) {
@@ -624,11 +860,22 @@ document.querySelectorAll('.segmented-opt').forEach(btn => {
 
 function pintarSegmentado() {
   const esTotal = state.vista.tipo === 'total';
-  document.querySelectorAll('.segmented-opt').forEach(b => {
+  document.querySelectorAll('#vista-segmented .segmented-opt').forEach(b => {
     const activa = (b.dataset.vista === 'total') === esTotal;
     b.classList.toggle('is-active', activa);
     b.setAttribute('aria-selected', String(activa));
   });
+}
+
+/** Si hay una ficha abierta, la vuelve a pintar con la vista recién elegida
+ *  (mostrarFichaInmueble lee state.vista en cada llamada). Así no hace falta
+ *  cerrar y reabrir la ficha para que "Qué explica este puntaje" se acote al
+ *  indicador o indicador secundario que se acaba de seleccionar. */
+function refrescarFichaAbierta() {
+  const id = state.inmuebleSeleccionado?.id;
+  if (id == null) return;
+  const feature = geojsonSource.getFeatures().find(f => f.get('id') === id);
+  if (feature) mostrarFichaInmueble(feature);
 }
 
 function volverVistaGeneral() {
@@ -637,23 +884,25 @@ function volverVistaGeneral() {
   indicadorLayer.setVisible(false);
   document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
   pintarSegmentado();
+  pintarLeyenda();
+  refrescarFichaAbierta();
 }
 
 function seleccionarIndicador(nombre) {
   state.vista = { tipo: 'indicador', nombre };
   geojsonLayer.setStyle(estiloClickeable);
   indicadorLayer.setVisible(true);
-  indicadorLayer.setStyle(feature => {
-    if (sinEvaluar(feature)) return estiloSinEvaluar;
-    const ind = (propsDetalle(feature).indicadores || []).find(i => i.indicador_nombre === nombre);
-    return estiloPorValor(ind?.riesgo_indicador || 0, 'parcial');
-  });
+  indicadorLayer.setStyle(feature =>
+    sinEvaluar(feature) ? estiloSinEvaluar : estiloPorValor(valorIndicadorDe(feature, nombre), 'parcial', esSimulado(feature))
+  );
 
   document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
   const header = document.querySelector(`.indicador-header[data-indicador="${CSS.escape(nombre)}"]`);
   if (header) header.classList.add('active');
 
   pintarSegmentado();
+  pintarLeyenda();
+  refrescarFichaAbierta();
   indicadorLayer.changed();
 }
 
@@ -661,21 +910,17 @@ function seleccionarSubindicador(nombre) {
   state.vista = { tipo: 'subindicador', nombre };
   geojsonLayer.setStyle(estiloClickeable);
   indicadorLayer.setVisible(true);
-  indicadorLayer.setStyle(feature => {
-    if (sinEvaluar(feature)) return estiloSinEvaluar;
-    let valor = 0;
-    for (const ind of propsDetalle(feature).indicadores || []) {
-      const sub = (ind.sub_indicadores || []).find(s => s.sub_indicador_nombre === nombre);
-      if (sub) { valor = sub.riesgo_subindicador || 0; break; }
-    }
-    return estiloPorValor(valor, 'parcial');
-  });
+  indicadorLayer.setStyle(feature =>
+    sinEvaluar(feature) ? estiloSinEvaluar : estiloPorValor(valorSubindicadorDe(feature, nombre), 'parcial', esSimulado(feature))
+  );
 
   document.querySelectorAll('.indicador-header, .subindicador-item').forEach(el => el.classList.remove('active'));
   const item = document.querySelector(`.subindicador-item[data-subindicador="${CSS.escape(nombre)}"]`);
   if (item) item.classList.add('active');
 
   pintarSegmentado();
+  pintarLeyenda();
+  refrescarFichaAbierta();
   indicadorLayer.changed();
 }
 
@@ -701,6 +946,19 @@ function mostrarFichaInmueble(feature) {
   const total = riesgoTotalDe(detalle);
   const nivel = nivelTotal(total);
   const inmuebleId = props.id;
+  const { tipo: vistaTipo, nombre: vistaNombre } = state.vista;
+
+  // Cada edición o simulación vuelve a pintar toda la ficha (los totales y
+  // aportes dependen del detalle completo, no se pueden parchear a mano sin
+  // duplicar esa lógica). Si es el mismo inmueble que ya estaba abierto, se
+  // recuerda qué grupos estaban desplegados para reabrirlos abajo — si no,
+  // el usuario tendría que volver a desplegarlos después de cada cambio.
+  const esMismoInmueble = state.inmuebleSeleccionado?.id === inmuebleId;
+  const gruposAbiertos = esMismoInmueble
+    ? new Set([...document.querySelectorAll('.explica-group-body.visible')]
+        .map(b => b.closest('.explica-group')?.dataset.grupo)
+        .filter(Boolean))
+    : new Set();
 
   state.inmuebleSeleccionado = { id: inmuebleId, props, detalle };
 
@@ -723,25 +981,31 @@ function mostrarFichaInmueble(feature) {
   const marcador = Math.max(0, Math.min(100, (total / RIESGO_MAX) * 100));
   const segs = segmentosEscala().map(s => `<div class="scale-seg" style="width:${s.w}%;background:${s.fill}"></div>`).join('');
 
-  // Aporte de cada sub-indicador sobre el total ponderado
-  const filas = [];
-  indicadores.forEach(ind => {
-    (ind.sub_indicadores || []).forEach(sub => {
-      filas.push({
-        nombre: sub.sub_indicador_nombre || '—',
-        clase: sub.clase,
-        valor: parseFloat(sub.riesgo_subindicador) || 0,
-        ponderado: parseFloat(sub.riesgo_subindicador_ponderado) || 0
-      });
-    });
-  });
+  // Aporte de cada indicador secundario sobre el total ponderado, agrupado
+  // por su indicador primario — mismo criterio de agrupación que ya usan el
+  // panel izquierdo (renderizarIndicadores) y el modal "Evaluar inmueble".
+  const grupos = indicadores.map(ind => ({
+    nombre: ind.indicador_nombre || '—',
+    filas: (ind.sub_indicadores || []).map(sub => ({
+      nombre: sub.sub_indicador_nombre || '—',
+      clase: sub.clase,
+      valor: parseFloat(sub.riesgo_subindicador) || 0,
+      ponderado: parseFloat(sub.riesgo_subindicador_ponderado) || 0
+    }))
+  })).filter(g => g.filas.length);
+
+  const filas = grupos.flatMap(g => g.filas);
   const sumaPond = filas.reduce((s, f) => s + f.ponderado, 0);
   const maxValor = Math.max(...filas.map(f => f.valor), 0.0001);
 
-  const filasHtml = filas.length ? filas.map(f => {
+  // `base` es el denominador del "% del total": el total del edificio en la
+  // vista general, pero el total del grupo cuando la ficha está acotada a un
+  // solo indicador primario — así el porcentaje siempre es relativo a lo que
+  // se está mostrando, no siempre al edificio completo.
+  const tarjetaSub = (f, base = sumaPond) => {
     const n = nivelParcial(f.valor);
     const ancho = Math.min(100, (f.valor / maxValor) * 100);
-    const aporte = sumaPond ? `${num((f.ponderado / sumaPond) * 100, 1)}%` : '—';
+    const aporte = base ? `${num((f.ponderado / base) * 100, 1)}%` : '—';
     const claseTxt = f.clase || 'Sin clase';
     const editable = state.role === 'editor';
     return `
@@ -759,35 +1023,104 @@ function mostrarFichaInmueble(feature) {
           <span class="sub-aporte">${aporte}</span>
         </div>
       </div>`;
-  }).join('') : '<p class="panel-placeholder">Este inmueble no tiene evaluaciones registradas.</p>';
+  };
 
-  const scoreCardHtml = noEvaluado ? `
-    <div class="score-card">
-      <div class="score-top">
-        <span class="clase-chip" style="background:${NO_EVALUADO.tint};color:${NO_EVALUADO.fg};font-size:14px;padding:6px 14px;">${NO_EVALUADO.label}</span>
-      </div>
-      <p class="panel-placeholder">Sin evaluación para ${esc(state.amenazaActiva?.nombre || 'esta amenaza')}.</p>
-    </div>
-  ` : `
-    <div class="score-card">
-      <div class="score-top">
-        <div class="score-value" style="color:${nivel.fg}">${num(total)}</div>
-        <div class="score-side">
-          <div class="score-level" style="color:${nivel.fg}">Riesgo ${nivel.label.toLowerCase()}</div>
-          <div class="score-range">rango ${nivel.rango} · de ${num(RIESGO_MAX)}</div>
+  // "Qué explica este puntaje" sigue a la vista activa del panel izquierdo:
+  // en 'total' se ven todos los indicadores primarios (colapsados, mismo
+  // patrón que .indicador-header/.subindicadores-container); si hay uno
+  // puntual elegido (indicador o indicador secundario), solo se muestra lo
+  // que explica justo ese puntaje puntual, ya desplegado.
+  let filasHtml;
+  if (!grupos.length) {
+    filasHtml = '<p class="panel-placeholder">Este inmueble no tiene evaluaciones registradas.</p>';
+  } else if (vistaTipo === 'indicador') {
+    const grupo = grupos.find(g => g.nombre === vistaNombre);
+    if (grupo) {
+      // % relativo a la suma del propio grupo: entre sus tarjetas suman 100%.
+      const sumaGrupo = grupo.filas.reduce((s, f) => s + f.ponderado, 0);
+      filasHtml = `<div class="explica-group-body visible">${grupo.filas.map(f => tarjetaSub(f, sumaGrupo)).join('')}</div>`;
+    } else {
+      filasHtml = `<p class="panel-placeholder">Este inmueble no tiene evaluación para «${esc(vistaNombre)}».</p>`;
+    }
+  } else if (vistaTipo === 'subindicador') {
+    const f = filas.find(f => f.nombre === vistaNombre);
+    // Es la única tarjeta que se muestra: representa el 100% de lo visible.
+    filasHtml = f ? tarjetaSub(f, f.ponderado)
+      : `<p class="panel-placeholder">Este inmueble no tiene evaluación para «${esc(vistaNombre)}».</p>`;
+  } else {
+    filasHtml = grupos.map(g => {
+      const aporteGrupo = sumaPond
+        ? Math.round(g.filas.reduce((s, f) => s + f.ponderado, 0) / sumaPond * 100)
+        : 0;
+      return `
+        <div class="explica-group" data-grupo="${esc(g.nombre)}">
+          <div class="explica-group-head">
+            <span class="explica-group-title">${esc(g.nombre)}</span>
+            <span class="explica-group-aporte">${aporteGrupo}% del total</span>
+            <span class="explica-group-toggle">▼</span>
+          </div>
+          <div class="explica-group-body">${g.filas.map(tarjetaSub).join('')}</div>
+        </div>`;
+    }).join('');
+  }
+
+  let scoreCardHtml;
+  if (noEvaluado) {
+    scoreCardHtml = `
+      <div class="score-card">
+        <div class="score-top">
+          <span class="clase-chip" style="background:${NO_EVALUADO.tint};color:${NO_EVALUADO.fg};font-size:14px;padding:6px 14px;">${NO_EVALUADO.label}</span>
         </div>
-      </div>
-      <div class="scale">
-        <div class="scale-bar">${segs}</div>
-        <div class="scale-marker" style="left:${marcador}%"></div>
-        <div class="scale-ticks">
-          <span>0,00</span><span>1,76</span><span>2,51</span><span>3,26</span><span>4,00</span>
+        <p class="panel-placeholder">Sin evaluación para ${esc(state.amenazaActiva?.nombre || 'esta amenaza')}.</p>
+      </div>`;
+  } else if (vistaTipo === 'total') {
+    scoreCardHtml = `
+      <div class="score-card">
+        <div class="score-top">
+          <div class="score-value" style="color:${nivel.fg}">${num(total)}</div>
+          <div class="score-side">
+            <div class="score-level" style="color:${nivel.fg}">Riesgo ${nivel.label.toLowerCase()}</div>
+            <div class="score-range">rango ${nivel.rango} · de ${num(RIESGO_MAX)}</div>
+          </div>
         </div>
-      </div>
-    </div>
-  `;
+        <div class="scale">
+          <div class="scale-bar">${segs}</div>
+          <div class="scale-marker" style="left:${marcador}%"></div>
+          <div class="scale-ticks">
+            <span>0,00</span><span>1,76</span><span>2,51</span><span>3,26</span><span>4,00</span>
+          </div>
+        </div>
+      </div>`;
+  } else {
+    // Vista acotada a un indicador o indicador secundario puntual: se
+    // muestra su valor parcial (escala nivelParcial), no el índice total.
+    const valorSel = vistaTipo === 'indicador'
+      ? valorIndicadorDe(feature, vistaNombre)
+      : valorSubindicadorDe(feature, vistaNombre);
+    const nivelSel = nivelParcial(valorSel);
+    const etiqueta = vistaTipo === 'indicador' ? 'Indicador primario' : 'Indicador secundario';
+    scoreCardHtml = `
+      <div class="score-card">
+        <div class="kicker score-scope">${etiqueta} · ${esc(vistaNombre)}</div>
+        <div class="score-top">
+          <div class="score-value" style="color:${nivelSel.fg}">${num(valorSel)}</div>
+          <div class="score-side">
+            <div class="score-level" style="color:${nivelSel.fg}">Riesgo ${nivelSel.label.toLowerCase()}</div>
+            <div class="score-range">rango ${nivelSel.rango}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const simBadge = state.simulacion.inmuebleId === inmuebleId
+    ? `<div class="sim-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        Valores simulados, no guardados
+      </div>`
+    : '';
 
   document.getElementById('panel-content').innerHTML = `
+    ${simBadge}
     ${scoreCardHtml}
 
     <div class="explica">
@@ -797,6 +1130,24 @@ function mostrarFichaInmueble(feature) {
 
     <div id="edit-form-container-${inmuebleId}"></div>
   `;
+
+  document.querySelectorAll('.explica-group-head').forEach(head => {
+    head.addEventListener('click', () => {
+      const body = head.nextElementSibling;
+      const toggle = head.querySelector('.explica-group-toggle');
+      const visible = body.classList.toggle('visible');
+      toggle.textContent = visible ? '▲' : '▼';
+    });
+  });
+
+  // Reabre los grupos que estaban desplegados antes de repintar.
+  gruposAbiertos.forEach(nombre => {
+    const grupo = document.querySelector(`.explica-group[data-grupo="${CSS.escape(nombre)}"]`);
+    if (!grupo) return;
+    grupo.querySelector('.explica-group-body')?.classList.add('visible');
+    const toggle = grupo.querySelector('.explica-group-toggle');
+    if (toggle) toggle.textContent = '▲';
+  });
 
   document.getElementById('ficha-foot').hidden = state.role !== 'editor';
   document.getElementById('btn-evaluar-inmueble').hidden = !(state.role === 'editor' && noEvaluado);
@@ -833,6 +1184,15 @@ async function cargarEvaluacionesEnFicha(inmuebleId) {
       };
     });
 
+    // Si este inmueble tiene una hipótesis de simulación activa, sus valores
+    // pisan a los reales acá: el selector de edición debe preseleccionar lo
+    // que se está viendo en pantalla, no lo que hay guardado en la base.
+    if (state.simulacion.inmuebleId === inmuebleId) {
+      Object.values(state.evaluacionesActuales).forEach(ev => {
+        if (ev.subId in state.simulacion.cambios) ev.valor = state.simulacion.cambios[ev.subId];
+      });
+    }
+
     state.clasesPorSub = {};
     todasClases.forEach(c => {
       (state.clasesPorSub[c.sub_indicador] ||= []).push({ nombre: c.nombre, valor: c.valor });
@@ -852,10 +1212,10 @@ function abrirEdicionSub(card) {
 
   const nombre = card.dataset.subnombre;
   const ev = state.evaluacionesActuales[nombre];
-  if (!ev) { toast('Este sub-indicador no tiene evaluación registrada.', 'error'); return; }
+  if (!ev) { toast('Este indicador secundario no tiene evaluación registrada.', 'error'); return; }
 
   const clases = state.clasesPorSub[ev.subId] || [];
-  if (!clases.length) { toast('Este sub-indicador no tiene clases definidas.', 'error'); return; }
+  if (!clases.length) { toast('Este indicador secundario no tiene clases definidas.', 'error'); return; }
 
   const chip = card.querySelector('.clase-chip');
   const options = clases.map(c =>
@@ -863,7 +1223,7 @@ function abrirEdicionSub(card) {
   ).join('');
 
   const select = document.createElement('select');
-  select.className = 'eval-clase-select';
+  select.className = 'eval-clase-select' + (state.simulacion.activo ? ' is-simulando' : '');
   select.innerHTML = options;
   select.setAttribute('aria-label', `Clase de ${nombre}`);
 
@@ -880,6 +1240,12 @@ function abrirEdicionSub(card) {
 async function guardarEvaluacion(card, evaluacionId, select, msg) {
   const valor = parseInt(select.value, 10);
   if (isNaN(valor)) return;
+
+  if (state.simulacion.activo) {
+    const subId = state.evaluacionesActuales[card.dataset.subnombre]?.subId;
+    if (subId != null) simularEvaluacion(subId, valor);
+    return;
+  }
 
   select.disabled = true;
   card.classList.add('is-saving');
@@ -1030,92 +1396,28 @@ async function guardarEdicionInmueble(id) {
 }
 
 // =============================================================================
-// EDITOR: administrar clases
+// GUÍA RÁPIDA: cómo leer los números
 // =============================================================================
 
-const clasesModal = document.getElementById('clases-panel');
+const ayudaModal = document.getElementById('ayuda-panel');
+document.getElementById('btn-ayuda').addEventListener('click', abrirModalAyuda);
+document.getElementById('btn-cerrar-ayuda').addEventListener('click', cerrarModalAyuda);
+document.getElementById('ayuda-backdrop').addEventListener('click', cerrarModalAyuda);
 
-document.getElementById('btn-administrar-clases').addEventListener('click', abrirPanelClases);
-document.getElementById('btn-cerrar-clases').addEventListener('click', cerrarPanelClases);
-document.getElementById('clases-backdrop').addEventListener('click', cerrarPanelClases);
+function cerrarModalAyuda() { ayudaModal.hidden = true; }
 
-function cerrarPanelClases() { clasesModal.hidden = true; }
-
-async function abrirPanelClases() {
-  clasesModal.hidden = false;
-  const content = document.getElementById('clases-panel-content');
-  content.innerHTML = '<p class="panel-placeholder">Cargando clases…</p>';
-
-  try {
-    const [clasesRes, subRes] = await Promise.all([
-      apiFetch(`${API_BASE}/api/clases/`),
-      apiFetch(`${API_BASE}/api/subindicadores/`)
-    ]);
-    if (!clasesRes.ok || !subRes.ok) throw new Error('Error al cargar datos');
-
-    const clases = await clasesRes.json();
-    const subindicadores = await subRes.json();
-
-    const subMap = {};
-    subindicadores.forEach(s => { subMap[s.id] = s.nombre; });
-
-    const grouped = {};
-    clases.forEach(c => {
-      const nombre = subMap[c.sub_indicador] || `Sub-indicador ${c.sub_indicador}`;
-      (grouped[nombre] ||= []).push(c);
-    });
-
-    const html = Object.entries(grouped).map(([subNombre, items]) => `
-      <div class="clase-group">
-        <div class="clase-group-title">${esc(subNombre)}</div>
-        ${items.map(c => `
-          <div class="clase-row">
-            <span class="clase-nombre">${esc(c.nombre)}</span>
-            <input type="number" class="clase-valor-input" id="clase-val-${c.id}" value="${c.valor}" min="0" max="4" aria-label="Valor de ${esc(c.nombre)}">
-            <button class="btn btn--ghost btn-clase-save" data-clase-id="${c.id}">Guardar</button>
-            <span class="clase-msg" id="clase-msg-${c.id}"></span>
-          </div>
-        `).join('')}
-      </div>
-    `).join('');
-
-    content.innerHTML = html || '<p class="panel-placeholder">No hay clases definidas.</p>';
-
-    content.querySelectorAll('.btn-clase-save').forEach(btn => {
-      btn.addEventListener('click', () => guardarClase(Number(btn.dataset.claseId)));
-    });
-  } catch (e) {
-    if (e.message !== 'Session expired') {
-      content.innerHTML = '<p class="panel-placeholder">Error al cargar las clases.</p>';
-    }
-  }
-}
-
-async function guardarClase(id) {
-  const input = document.getElementById(`clase-val-${id}`);
-  const msg = document.getElementById(`clase-msg-${id}`);
-  const btn = input?.closest('.clase-row')?.querySelector('.btn-clase-save');
-  if (!input) return;
-
-  const valor = parseInt(input.value, 10);
-  if (isNaN(valor)) { msg.textContent = '✗'; return; }
-
-  if (btn) btn.disabled = true;
-  msg.textContent = '…';
-
-  try {
-    const res = await apiFetch(`${API_BASE}/api/clases/actualizar/${id}/`, {
-      method: 'PATCH',
-      body: JSON.stringify({ valor })
-    });
-    msg.textContent = res.ok ? '✓' : '✗';
-    if (res.ok) toast('Clase actualizada. El recálculo afecta a todos los inmuebles.', 'ok');
-  } catch (e) {
-    if (e.message !== 'Session expired') msg.textContent = '✗';
-  } finally {
-    if (btn) btn.disabled = false;
-    setTimeout(() => { msg.textContent = ''; }, 3000);
-  }
+/** Los niveles se listan desde NIVELES/NO_EVALUADO —no como texto suelto en
+ *  el HTML— para que la guía nunca pueda desincronizarse de los cortes y
+ *  colores reales que usa el mapa. */
+function abrirModalAyuda() {
+  document.getElementById('ayuda-niveles').innerHTML = [...NIVELES, NO_EVALUADO].map(n => `
+    <div class="ayuda-nivel-row">
+      <span class="legend-swatch" style="background:${n.fill}"></span>
+      <span class="ayuda-nivel-label">${n.label}</span>
+      <span class="ayuda-nivel-rango">${n.key === 'noeval' ? 'sin evaluación registrada' : n.rango}</span>
+    </div>
+  `).join('');
+  ayudaModal.hidden = false;
 }
 
 // =============================================================================
@@ -1150,7 +1452,7 @@ async function abrirModalEvaluar(inmuebleId) {
   document.getElementById('evaluar-panel-title').textContent =
     amenazaNombre ? `Evaluar inmueble · ${amenazaNombre}` : 'Evaluar inmueble';
   const content = document.getElementById('evaluar-panel-content');
-  content.innerHTML = '<p class="panel-placeholder">Cargando sub-indicadores…</p>';
+  content.innerHTML = '<p class="panel-placeholder">Cargando indicadores secundarios…</p>';
 
   try {
     const [indRes, subRes, clasesRes] = await Promise.all([
@@ -1191,7 +1493,7 @@ async function abrirModalEvaluar(inmuebleId) {
         </div>`;
     }).join('');
 
-    content.innerHTML = html || '<p class="panel-placeholder">Esta amenaza no tiene sub-indicadores definidos.</p>';
+    content.innerHTML = html || '<p class="panel-placeholder">Esta amenaza no tiene indicadores secundarios definidos.</p>';
     evaluarFoot.hidden = false;
 
     const selects = content.querySelectorAll('.eval-clase-select');
@@ -1204,7 +1506,7 @@ async function abrirModalEvaluar(inmuebleId) {
     evaluarBtnGuardar.onclick = () => guardarEvaluacionLote(inmuebleId, amenazaId, selects);
   } catch (e) {
     if (e.message !== 'Session expired') {
-      content.innerHTML = '<p class="panel-placeholder">Error al cargar los sub-indicadores.</p>';
+      content.innerHTML = '<p class="panel-placeholder">Error al cargar los indicadores secundarios.</p>';
     }
   }
 }
@@ -1262,6 +1564,21 @@ document.getElementById('btn-descargar-kml').addEventListener('click', async () 
     toast('KML descargado.', 'ok');
   } catch (e) {
     if (e.message !== 'Session expired') toast('No se pudo generar el archivo KML.', 'error');
+  }
+});
+
+document.getElementById('btn-descargar-geojson').addEventListener('click', async () => {
+  cerrarMenus();
+  toast('Generando GeoJSON…');
+  try {
+    const amenazaId = state.amenazaActiva?.id ?? AMENAZA_POR_DEFECTO;
+    const res = await apiFetch(`${API_BASE}/api/crear-geojson-detalle/?amenaza_id=${amenazaId}`);
+    if (!res.ok) throw new Error('Error al generar GeoJSON');
+    const nombre = (state.amenazaActiva?.nombre || 'Riesgo').replace(/\s+/g, '_');
+    descargarBlob(await res.blob(), `${nombre}_Detalle.geojson`);
+    toast('GeoJSON descargado.', 'ok');
+  } catch (e) {
+    if (e.message !== 'Session expired') toast('No se pudo generar el archivo GeoJSON.', 'error');
   }
 });
 
@@ -1421,13 +1738,69 @@ document.getElementById('btn-centrar').addEventListener('click', () => {
   map.getView().animate({ center: VISTA_INICIAL.center, zoom: VISTA_INICIAL.zoom, duration: 400 });
 });
 
+// ============================================================================
+// TEMP — solo para sacar capturas de pantalla. Quitar este bloque (y los dos
+// botones "FIG"/"COLOR" en index.html) cuando ya no se necesiten las fotos.
+// ============================================================================
+let tempFigurasOcultas = false;
+let tempVisibilidadPrevia = {};
+document.getElementById('btn-temp-toggle-figuras').addEventListener('click', () => {
+  tempFigurasOcultas = !tempFigurasOcultas;
+  if (tempFigurasOcultas) {
+    tempVisibilidadPrevia = {
+      geo: geojsonLayer.getVisible(),
+      ind: indicadorLayer.getVisible(),
+      sel: selectionLayer.getVisible()
+    };
+    geojsonLayer.setVisible(false);
+    indicadorLayer.setVisible(false);
+    selectionLayer.setVisible(false);
+  } else {
+    geojsonLayer.setVisible(tempVisibilidadPrevia.geo);
+    indicadorLayer.setVisible(tempVisibilidadPrevia.ind);
+    selectionLayer.setVisible(tempVisibilidadPrevia.sel);
+  }
+});
+
+let tempSinColor = false;
+let tempEstiloGeojsonPrevio = null;
+let tempEstiloIndicadorPrevio = null;
+document.getElementById('btn-temp-toggle-color').addEventListener('click', () => {
+  tempSinColor = !tempSinColor;
+  if (tempSinColor) {
+    tempEstiloGeojsonPrevio = geojsonLayer.getStyle();
+    tempEstiloIndicadorPrevio = indicadorLayer.getStyle();
+    const estiloNeutro = new Style({
+      fill: new Fill({ color: 'rgba(158,158,158,0.85)' }),
+      stroke: new Stroke({ color: '#ffffff', width: 1 })
+    });
+    geojsonLayer.setStyle(estiloNeutro);
+    indicadorLayer.setStyle(estiloNeutro);
+  } else {
+    geojsonLayer.setStyle(tempEstiloGeojsonPrevio);
+    indicadorLayer.setStyle(tempEstiloIndicadorPrevio);
+  }
+});
+// ============================================================================
+// /TEMP
+// ============================================================================
+
 document.getElementById('btn-toggle-left').addEventListener('click', togglePanelIzquierdo);
 document.getElementById('btn-cerrar-ficha').addEventListener('click', cerrarFicha);
 
+// La leyenda arranca colapsada: solo el total siempre visible, dona + lista
+// + pie al hacer click en la cabecera.
+const legendBody = document.getElementById('legend-body');
+const legendToggle = document.getElementById('legend-toggle');
+document.getElementById('legend-head').addEventListener('click', () => {
+  const visible = legendBody.classList.toggle('visible');
+  legendToggle.textContent = visible ? '▲' : '▼';
+});
+
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (!evaluarModal.hidden) cerrarModalEvaluar();
-    else if (!clasesModal.hidden) cerrarPanelClases();
+    if (!ayudaModal.hidden) cerrarModalAyuda();
+    else if (!evaluarModal.hidden) cerrarModalEvaluar();
     else if (!shell.classList.contains('is-right-closed')) cerrarFicha();
   }
 });

@@ -44,8 +44,13 @@ class DjangoMigrations(models.Model):
 
 
 class Evaluacion(models.Model):
-    id_inmueble = models.ForeignKey('Inmuebles', models.DO_NOTHING, db_column='id_inmueble')
-    id_subindicador = models.ForeignKey('SubIndicadores', models.DO_NOTHING, db_column='id_subindicador')
+    # CASCADE/RESTRICT reflejan el comportamiento real de la base (ver
+    # api/migrations/0005_fix_evaluacion_on_delete.py): borrar un inmueble
+    # arrastra sus evaluaciones; borrar un sub-indicador con evaluaciones
+    # asociadas está bloqueado. DO_NOTHING describía la tabla tal como la
+    # crea Django por defecto, no lo que hay realmente en producción.
+    id_inmueble = models.ForeignKey('Inmuebles', models.CASCADE, db_column='id_inmueble')
+    id_subindicador = models.ForeignKey('SubIndicadores', models.RESTRICT, db_column='id_subindicador')
     valor = models.IntegerField(default=0)
     fecha_evaluacion = models.DateField()
     fecha_creacion = models.DateTimeField(blank=True, null=True)

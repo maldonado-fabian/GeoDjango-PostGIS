@@ -1,5 +1,6 @@
 asgiref==3.11.0
 django-cors-headers==4.7.0
+django-debug-toolbar==8.0.0  # solo dev (DEBUG=True) — medición ISO/IEC 25010
 djangorestframework-simplejwt==5.5.0
 # --- Reporte PDF (resumen global de riesgo) ---
 reportlab==4.4.3

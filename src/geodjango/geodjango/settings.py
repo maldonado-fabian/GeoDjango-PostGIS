@@ -47,6 +47,11 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
 ]
 
+if DEBUG:
+    # Solo para medición de eficiencia en dev (validación ISO/IEC 25010).
+    # No se activa fuera de DEBUG=True, así que no llega a producción.
+    INSTALLED_APPS += ['debug_toolbar']
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -57,6 +62,17 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+if DEBUG:
+    MIDDLEWARE = ['debug_toolbar.middleware.DebugToolbarMiddleware'] + MIDDLEWARE
+
+# El contenedor recibe las requests desde el navegador del host con IPs de la
+# red de Docker (no 127.0.0.1), así que el chequeo por IP de INTERNAL_IPS no
+# sirve acá: se fuerza a mostrar siempre que DEBUG esté activo.
+INTERNAL_IPS = ['127.0.0.1']
+DEBUG_TOOLBAR_CONFIG = {
+    'SHOW_TOOLBAR_CALLBACK': lambda request: DEBUG,
+}
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
